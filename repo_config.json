@@ -2,5 +2,7 @@
   "type": "github",
   "owner": "vavilon1205",
   "repo": "DocumentFiller",
-  "branch": "main"
+  "branch": "main",
+  "token": "",
+  "update_channel": "stable"
 }

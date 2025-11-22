@@ -1,4 +1,4 @@
-# update_manager.py - обновление через GitHub API
+# update_manager.py - улучшенная версия с обработкой отсутствия репозитория
 import requests
 import json
 import os
@@ -27,51 +27,108 @@ class UpdateManager:
         """Загрузить конфигурацию"""
         try:
             config_path = os.path.join(self.script_dir, 'repo_config.json')
+            if not os.path.exists(config_path):
+                # Создаем конфиг по умолчанию если не существует
+                default_config = {
+                    "type": "github",
+                    "owner": "",
+                    "repo": "",
+                    "branch": "main",
+                    "token": "",
+                    "update_channel": "stable"
+                }
+                with open(config_path, 'w', encoding='utf-8') as f:
+                    json.dump(default_config, f, indent=2, ensure_ascii=False)
+                return default_config
+
             with open(config_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                config = json.load(f)
+
+            # Проверяем обязательные поля
+            if not config.get('owner') or not config.get('repo'):
+                print("⚠️ Внимание: репозиторий не настроен в repo_config.json")
+                print("   Заполните поля 'owner' и 'repo' для проверки обновлений")
+
+            return config
+
         except Exception as e:
-            print(f"Ошибка загрузки конфигурации: {e}")
+            print(f"❌ Ошибка загрузки конфигурации: {e}")
             return {}
 
     def get_current_version(self):
         """Получить текущую версию"""
         try:
             version_path = os.path.join(self.script_dir, 'version_config.json')
+            if not os.path.exists(version_path):
+                # Создаем версию по умолчанию если не существует
+                default_version = {
+                    "current_version": "1.0.0",
+                    "update_url": "",
+                    "check_updates_on_start": False,
+                    "update_channel": "stable"
+                }
+                with open(version_path, 'w', encoding='utf-8') as f:
+                    json.dump(default_version, f, indent=2, ensure_ascii=False)
+                return '1.0.0'
+
             with open(version_path, 'r', encoding='utf-8') as f:
                 version_data = json.load(f)
                 return version_data.get('current_version', '1.0.0')
         except Exception as e:
-            print(f"Ошибка получения версии: {e}")
+            print(f"❌ Ошибка получения версии: {e}")
             return '1.0.0'
+
+    def is_repository_configured(self):
+        """Проверить, настроен ли репозиторий"""
+        return bool(self.config.get('owner') and self.config.get('repo'))
 
     def check_for_updates(self):
         """Проверить наличие обновлений через GitHub API"""
         try:
+            # Проверяем настройки репозитория
+            if not self.is_repository_configured():
+                return False, "Репозиторий не настроен. Заполните поля 'owner' и 'repo' в файле repo_config.json"
+
             owner = self.config.get('owner', '')
             repo = self.config.get('repo', '')
 
             if not owner or not repo:
                 return False, "Не настроены данные репозитория"
 
+            print(f"🔍 Проверка обновлений для {owner}/{repo}...")
+
             # URL для получения последнего релиза
             url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
 
-            print(f"Проверка обновлений: {url}")
-
             # Делаем запрос к GitHub API
-            response = requests.get(url, timeout=10)
+            headers = {}
+            token = self.config.get('token')
+            if token:
+                headers['Authorization'] = f'token {token}'
+
+            response = requests.get(url, headers=headers, timeout=10)
 
             if response.status_code == 404:
                 return False, "Репозиторий или релизы не найдены"
+            elif response.status_code == 403:
+                return False, "Превышен лимит запросов к GitHub API"
             elif response.status_code != 200:
-                return False, f"Ошибка API GitHub: {response.status_code}"
+                return False, f"Ошибка GitHub API: {response.status_code}"
 
             release_data = response.json()
             latest_version = release_data['tag_name']
-            download_url = release_data['zipball_url']  # Ссылка на ZIP-архив
+            download_url = None
 
-            print(f"Текущая версия: {self.current_version}")
-            print(f"Последняя версия: {latest_version}")
+            # Ищем asset для скачивания
+            assets = release_data.get('assets', [])
+            if assets:
+                download_url = assets[0]['browser_download_url']
+            else:
+                # Если нет assets, используем архив исходного кода
+                download_url = release_data['zipball_url']
+
+            print(f"📋 Текущая версия: {self.current_version}")
+            print(f"📋 Последняя версия: {latest_version}")
 
             # Сравниваем версии
             if self.is_newer_version(latest_version, self.current_version):
@@ -79,7 +136,8 @@ class UpdateManager:
                     'version': latest_version,
                     'download_url': download_url,
                     'release_notes': release_data.get('body', ''),
-                    'published_at': release_data.get('published_at', '')
+                    'published_at': release_data.get('published_at', ''),
+                    'assets': assets
                 }
                 return True, update_info
             else:
@@ -124,17 +182,23 @@ class UpdateManager:
             temp_dir = tempfile.mkdtemp()
             zip_path = os.path.join(temp_dir, 'update.zip')
 
-            print(f"Скачивание обновления: {download_url}")
+            print(f"📥 Скачивание обновления: {download_url}")
 
-            # Скачиваем ZIP-архив
-            response = requests.get(download_url, stream=True, timeout=30)
+            headers = {}
+            token = self.config.get('token')
+            if token and 'api.github.com' in download_url:
+                headers['Authorization'] = f'token {token}'
+
+            # Скачиваем архив
+            response = requests.get(download_url, headers=headers, stream=True, timeout=30)
             response.raise_for_status()
 
             with open(zip_path, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
+                    if chunk:
+                        f.write(chunk)
 
-            print("Обновление скачано успешно")
+            print("✅ Обновление скачано успешно")
             return True, zip_path
 
         except Exception as e:
@@ -149,7 +213,7 @@ class UpdateManager:
             # Создаем временную папку для распаковки
             extract_dir = tempfile.mkdtemp()
 
-            print(f"Распаковка обновления в: {extract_dir}")
+            print(f"📦 Распаковка обновления в: {extract_dir}")
 
             # Распаковываем архив
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
@@ -164,7 +228,7 @@ class UpdateManager:
 
             update_files_dir = os.path.join(extract_dir, extracted_folders[0])
 
-            print(f"Копирование файлов из: {update_files_dir}")
+            print(f"🔄 Копирование файлов из: {update_files_dir}")
 
             # Копируем файлы обновления
             self.copy_update_files(update_files_dir, self.script_dir)
@@ -174,9 +238,12 @@ class UpdateManager:
 
             # Очищаем временные файлы
             shutil.rmtree(extract_dir, ignore_errors=True)
-            os.unlink(zip_path)
+            try:
+                os.unlink(zip_path)
+            except:
+                pass
 
-            print("Обновление установлено успешно")
+            print("✅ Обновление установлено успешно")
             return True, "Обновление успешно установлено"
 
         except Exception as e:
@@ -218,16 +285,10 @@ class UpdateManager:
     def update_version_config(self):
         """Обновить версию в конфиге после успешного обновления"""
         try:
-            version_path = os.path.join(self.script_dir, 'version_config.json')
-            with open(version_path, 'r', encoding='utf-8') as f:
-                version_data = json.load(f)
-
             # Версия будет обновлена после перезапуска и проверки нового релиза
-            # Пока оставляем как есть
-            print("Версия будет обновлена после перезапуска")
-
+            print("ℹ️ Версия будет обновлена после перезапуска")
         except Exception as e:
-            print(f"Ошибка обновления версии: {e}")
+            print(f"⚠️ Ошибка обновления версии: {e}")
 
     def create_backup(self):
         """Создать резервную копию"""
@@ -241,7 +302,7 @@ class UpdateManager:
             # Копируем важные файлы
             important_files = [
                 'main.py', 'main_window.py', 'settings.py',
-                'theme_manager.py', 'widgets.py', 'updater.py',
+                'theme_manager.py', 'widgets.py', 'update_manager.py',
                 'version_config.json', 'repo_config.json',
                 'анкеты_данные.xlsx', 'license.json'
             ]
@@ -252,11 +313,11 @@ class UpdateManager:
                 if os.path.exists(src):
                     shutil.copy2(src, backup_path)
 
-            print(f"Резервная копия создана: {backup_path}")
+            print(f"📂 Резервная копия создана: {backup_path}")
             return True
 
         except Exception as e:
-            print(f"Ошибка создания резервной копии: {e}")
+            print(f"❌ Ошибка создания резервной копии: {e}")
             return False
 
     def restore_backup(self):
@@ -282,11 +343,11 @@ class UpdateManager:
                     os.remove(dst)
                 shutil.copy2(src, dst)
 
-            print(f"Восстановлено из резервной копии: {latest_backup}")
+            print(f"🔄 Восстановлено из резервной копии: {latest_backup}")
             return True
 
         except Exception as e:
-            print(f"Ошибка восстановления из резервной копии: {e}")
+            print(f"❌ Ошибка восстановления из резервной копии: {e}")
             return False
 
     def restart_program(self):
@@ -305,14 +366,14 @@ class UpdateManager:
 
             sys.exit(0)
         except Exception as e:
-            print(f"Ошибка перезапуска: {e}")
+            print(f"❌ Ошибка перезапуска: {e}")
 
     def auto_update_from_repo(self):
         """Автоматическое обновление из репозитория"""
         try:
             success, result = self.check_for_updates()
             if success and result != "up_to_date":
-                print("Найдены обновления, начинаем установку...")
+                print("🔄 Найдены обновления, начинаем установку...")
                 return self.download_and_install_update(result)
             return success, "Обновлений не найдено" if result == "up_to_date" else result
         except Exception as e:
@@ -332,3 +393,12 @@ class UpdateManager:
 
         except Exception as e:
             return False, f"Ошибка установки обновления: {str(e)}"
+
+    def get_repository_info(self):
+        """Получить информацию о настройках репозитория"""
+        return {
+            'configured': self.is_repository_configured(),
+            'owner': self.config.get('owner', ''),
+            'repo': self.config.get('repo', ''),
+            'branch': self.config.get('branch', 'main')
+        }
