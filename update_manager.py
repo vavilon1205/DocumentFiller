@@ -1,4 +1,4 @@
-# update_manager.py - ВЕРСИЯ С АВТОМАТИЧЕСКОЙ СБОРКОЙ EXE ПРИ ОБНОВЛЕНИИ
+# update_manager.py - ВЕРСИЯ С ПРАВИЛЬНОЙ СБОРКОЙ EXE И ВКЛЮЧЕНИЕМ DLL
 import os
 import sys
 import json
@@ -34,8 +34,8 @@ class UpdateManager:
             if not os.path.exists(config_path):
                 default_config = {
                     "type": "github",
-                    "owner": "vavilon1205",
-                    "repo": "DocumentFiller",
+                    "owner": "",
+                    "repo": "",
                     "branch": "main",
                     "token": "",
                     "update_channel": "stable"
@@ -163,7 +163,7 @@ class UpdateManager:
             return False, f"Ошибка скачивания: {e}"
 
     def install_update(self, zip_path, update_info):
-        """Установить обновление - СБОРКА EXE ИЗ ИСХОДНИКОВ"""
+        """Установить обновление - УЛУЧШЕННАЯ СБОРКА EXE"""
         try:
             print(f"Начало установки обновления из: {zip_path}")
 
@@ -204,34 +204,51 @@ echo    Установка обновления DocumentFiller
 echo =======================================
 echo.
 
-echo [1/5] Ожидание завершения текущей программы...
-timeout /t 5 /nobreak >nul
+echo [1/6] Ожидание завершения текущей программы...
+timeout /t 3 /nobreak >nul
 
-echo [2/5] Завершение процесса {self.exe_name}...
+echo [2/6] Завершение процесса {self.exe_name}...
 taskkill /f /im "{self.exe_name}" >nul 2>&1
 
-echo [3/5] Применение обновления...
-REM Удаляем старые файлы (кроме пользовательских данных)
-del /q "{os.path.join(self.script_dir, '*.py')}" >nul 2>&1
-del /q "{os.path.join(self.script_dir, '*.spec')}" >nul 2>&1
+echo [3/6] Ожидание освобождения файлов...
+timeout /t 2 /nobreak >nul
 
-REM Копируем новые файлы
-xcopy "{update_root}\\*" "{self.script_dir}\\" /Y /E /H /I >nul 2>&1
+echo [4/6] Копирование обновленных файлов...
+REM Создаем временную папку для нового EXE
+mkdir "%TEMP%\\docfiller_update" >nul 2>&1
 
-REM Копируем собранный EXE
-copy "{os.path.join(update_root, 'dist', 'DocumentFiller', self.exe_name)}" "{self.script_dir}\\" >nul 2>&1
+REM Копируем все файлы из обновления, кроме пользовательских данных
+xcopy "{update_root}\\*" "{self.script_dir}\\" /Y /E /H /I /EXCLUDE:exclude_list.txt >nul 2>&1
 
-echo [4/5] Очистка временных файлов...
+REM Копируем собранный EXE и всю папку dist
+if exist "{os.path.join(update_root, 'dist', 'DocumentFiller')}" (
+    xcopy "{os.path.join(update_root, 'dist', 'DocumentFiller')}\\*" "{self.script_dir}\\" /Y /E /H /I >nul 2>&1
+)
+
+echo [5/6] Очистка временных файлов...
 rmdir /s /q "{extract_dir}" >nul 2>&1
 del /q "{zip_path}" >nul 2>&1
+rmdir /s /q "%TEMP%\\docfiller_update" >nul 2>&1
 
-echo [5/5] Запуск обновленной программы...
+echo [6/6] Запуск обновленной программы...
+cd /d "{self.script_dir}"
 start "" "{os.path.join(self.script_dir, self.exe_name)}"
 
 echo Обновление успешно завершено!
 timeout /t 2 >nul
 del /q "%~f0" >nul 2>&1
 """
+
+            # Создаем файл исключений для пользовательских данных
+            exclude_content = """анкеты_данные.xlsx
+license.json
+backups\\
+__update_tmp\\
+"""
+
+            exclude_path = os.path.join(self.script_dir, "exclude_list.txt")
+            with open(exclude_path, "w", encoding="utf-8") as f:
+                f.write(exclude_content)
 
             bat_path = os.path.join(self.script_dir, "apply_update.bat")
             with open(bat_path, "w", encoding="utf-8") as f:
@@ -259,7 +276,7 @@ del /q "%~f0" >nul 2>&1
             return False, error_msg
 
     def build_exe_from_source(self, source_dir):
-        """Собрать EXE из исходников"""
+        """Собрать EXE из исходников - УЛУЧШЕННАЯ ВЕРСИЯ"""
         try:
             print("Начало сборки EXE из исходников...")
 
@@ -273,34 +290,36 @@ del /q "%~f0" >nul 2>&1
             if missing_files:
                 return False, f"Отсутствуют необходимые файлы: {missing_files}"
 
-            # Создаем spec файл для сборки
-            spec_content = self.create_spec_file()
+            # Создаем улучшенный spec файл для сборки
+            spec_content = self.create_enhanced_spec_file()
             spec_path = os.path.join(source_dir, 'document_filler.spec')
             with open(spec_path, 'w', encoding='utf-8') as f:
                 f.write(spec_content)
 
+            # Устанавливаем PyInstaller если не установлен
+            self.ensure_pyinstaller()
+
             # Собираем EXE с помощью PyInstaller
             print("Запуск PyInstaller...")
             build_cmd = [
-                sys.executable, '-m', 'PyInstaller',
+                'pyinstaller',
                 'document_filler.spec',
                 '--clean',
                 '--noconfirm'
             ]
 
-            # Если запущены из EXE, используем Python из временной папки
+            # Если запущены из EXE, используем системный Python
             if getattr(sys, "frozen", False):
-                # Пытаемся найти Python в системе
-                python_path = self.find_python()
-                if python_path:
-                    build_cmd[0] = python_path
+                python_exe = self.find_python_exe()
+                if python_exe:
+                    build_cmd = [python_exe, '-m', 'PyInstaller'] + build_cmd[1:]
 
             result = subprocess.run(
                 build_cmd,
                 cwd=source_dir,
                 capture_output=True,
                 text=True,
-                timeout=300  # 5 минут таймаут
+                timeout=600  # 10 минут таймаут
             )
 
             if result.returncode != 0:
@@ -315,14 +334,40 @@ del /q "%~f0" >nul 2>&1
                 return False, "EXE файл не создан после сборки"
 
             print(f"EXE успешно собран: {exe_path}")
+
+            # Проверяем наличие DLL файлов
+            dist_dir = os.path.join(source_dir, 'dist', 'DocumentFiller')
+            dll_files = [f for f in os.listdir(dist_dir) if f.endswith('.dll')]
+            print(f"Найдено DLL файлов в дистрибутиве: {len(dll_files)}")
+
+            for dll in dll_files:
+                print(f"  - {dll}")
+
             return True, "Сборка завершена успешно"
 
         except subprocess.TimeoutExpired:
-            return False, "Таймаут при сборке EXE (более 5 минут)"
+            return False, "Таймаут при сборке EXE (более 10 минут)"
         except Exception as e:
             return False, f"Ошибка при сборке EXE: {e}"
 
-    def find_python(self):
+    def ensure_pyinstaller(self):
+        """Убедиться, что PyInstaller установлен"""
+        try:
+            import PyInstaller
+            print("PyInstaller уже установлен")
+            return True
+        except ImportError:
+            print("Установка PyInstaller...")
+            try:
+                subprocess.run([sys.executable, '-m', 'pip', 'install', 'pyinstaller'],
+                               check=True, capture_output=True)
+                print("PyInstaller успешно установлен")
+                return True
+            except Exception as e:
+                print(f"Ошибка установки PyInstaller: {e}")
+                return False
+
+    def find_python_exe(self):
         """Найти Python в системе"""
         try:
             # Пробуем разные варианты
@@ -333,9 +378,18 @@ del /q "%~f0" >nul 2>&1
                 r"C:\Python39\python.exe",
                 r"C:\Python310\python.exe",
                 r"C:\Python311\python.exe",
+                r"C:\Python312\python.exe",
+                r"C:\Python313\python.exe",
                 r"C:\Program Files\Python39\python.exe",
                 r"C:\Program Files\Python310\python.exe",
                 r"C:\Program Files\Python311\python.exe",
+                r"C:\Program Files\Python312\python.exe",
+                r"C:\Program Files\Python313\python.exe",
+                r"C:\Users\{}\AppData\Local\Programs\Python\Python39\python.exe".format(os.getenv('USERNAME')),
+                r"C:\Users\{}\AppData\Local\Programs\Python\Python310\python.exe".format(os.getenv('USERNAME')),
+                r"C:\Users\{}\AppData\Local\Programs\Python\Python311\python.exe".format(os.getenv('USERNAME')),
+                r"C:\Users\{}\AppData\Local\Programs\Python\Python312\python.exe".format(os.getenv('USERNAME')),
+                r"C:\Users\{}\AppData\Local\Programs\Python\Python313\python.exe".format(os.getenv('USERNAME')),
             ]
 
             for path in possible_paths:
@@ -347,14 +401,21 @@ del /q "%~f0" >nul 2>&1
                 except:
                     continue
 
+            print("Python не найден в системе")
             return None
         except Exception as e:
             print(f"Ошибка поиска Python: {e}")
             return None
 
-    def create_spec_file(self):
-        """Создать spec файл для сборки"""
+    def create_enhanced_spec_file(self):
+        """Создать улучшенный spec файл для сборки с включением всех DLL"""
         return '''# -*- mode: python ; coding: utf-8 -*-
+
+import sys
+from PyInstaller.building.build_main import Analysis
+from PyInstaller.building.api import PYZ, EXE, COLLECT
+from PyInstaller.building.datastruct import TOC, Tree
+from PyInstaller.building.osx import BUNDLE
 
 block_cipher = None
 
@@ -368,19 +429,36 @@ a = Analysis(
         ('Шаблоны', 'Шаблоны')
     ],
     hiddenimports=[
+        # Основные модули приложения
         'main_window', 'settings', 'theme_manager', 
         'license_manager', 'update_manager', 'widgets',
+
+        # PyQt5 модули
         'PyQt5', 'PyQt5.QtCore', 'PyQt5.QtGui', 'PyQt5.QtWidgets', 'PyQt5.QtNetwork',
+        'PyQt5.sip',
+
+        # Документы и шаблоны
         'openpyxl', 'docxtpl', 'jinja2', 'docx',
         'lxml', 'lxml.etree', 'lxml._elementpath',
+
+        # Сеть
         'requests', 'urllib3', 'chardet', 'idna', 'certifi',
         'email', 'email.mime', 'email.mime.text', 'email.mime.multipart',
         'email.mime.base', 'email.encoders', 'email.utils',
+        'ssl', 'http', 'http.client', 'http.cookies',
+
+        # Системные модули
+        'hashlib', 'json', 'datetime', 'os', 'sys', 're',
+        'uuid', 'platform', 'threading', 'tempfile', 'zipfile',
+        'xml', 'xml.etree', 'xml.etree.ElementTree'
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        'tkinter', 'unittest', 'test', 'pydoc',
+        'numpy', 'pandas', 'scipy', 'matplotlib', 'PIL',
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -388,6 +466,7 @@ a = Analysis(
     optimize=1,
 )
 
+# Включаем все необходимые DLL
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(
