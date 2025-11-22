@@ -1,8 +1,4 @@
-# update_manager.py
-# Улучшённый менеджер обновлений для DocumentFiller.exe
-# Поддерживает безопасное обновление EXE через временный bat (Windows).
-# Работает в режиме frozen (собранный exe) и в режиме скрипта.
-
+# update_manager.py - ВЕРСИЯ С АВТОМАТИЧЕСКОЙ СБОРКОЙ EXE ПРИ ОБНОВЛЕНИИ
 import os
 import sys
 import json
@@ -14,32 +10,32 @@ import subprocess
 from pathlib import Path
 from datetime import datetime
 
+
 class UpdateManager:
     def __init__(self, exe_name="DocumentFiller.exe"):
         self.exe_name = exe_name
         self.script_dir = self.get_script_dir()
         self.config = self.load_config()
         self.current_version = self.get_current_version()
-        # Папка для временных операций внутри директории приложения
         self.local_tmp = os.path.join(self.script_dir, "__update_tmp")
         os.makedirs(self.local_tmp, exist_ok=True)
 
     def get_script_dir(self):
-        """Возвращает директорию приложения (где лежит exe или скрипт)."""
+        """Возвращает директорию приложения"""
         if getattr(sys, "frozen", False):
             return os.path.dirname(sys.executable)
         else:
             return os.path.dirname(os.path.abspath(__file__))
 
     def load_config(self):
-        """Загрузить repo_config.json (если нет — создать дефолт)."""
+        """Загрузить repo_config.json"""
         try:
             config_path = os.path.join(self.script_dir, "repo_config.json")
             if not os.path.exists(config_path):
                 default_config = {
                     "type": "github",
-                    "owner": "",
-                    "repo": "",
+                    "owner": "vavilon1205",
+                    "repo": "DocumentFiller",
                     "branch": "main",
                     "token": "",
                     "update_channel": "stable"
@@ -50,13 +46,12 @@ class UpdateManager:
 
             with open(config_path, "r", encoding="utf-8") as f:
                 return json.load(f)
-
         except Exception as e:
             print(f"Ошибка загрузки repo_config.json: {e}")
             return {}
 
     def get_current_version(self):
-        """Чтение текущей версии из version_config.json (или создание дефолтной)."""
+        """Чтение текущей версии"""
         try:
             version_path = os.path.join(self.script_dir, "version_config.json")
             if not os.path.exists(version_path):
@@ -81,8 +76,7 @@ class UpdateManager:
         return bool(self.config.get("owner") and self.config.get("repo"))
 
     def check_for_updates(self):
-        """Проверяет GitHub Releases и возвращает (True, update_info) если доступно обновление,
-           или (True, "up_to_date") если нет, или (False, error_message)."""
+        """Проверяет обновления"""
         try:
             if not self.is_repository_configured():
                 return False, "Репозиторий не настроен"
@@ -97,10 +91,6 @@ class UpdateManager:
                 headers["Authorization"] = f"token {token}"
 
             resp = requests.get(url, headers=headers, timeout=10)
-            if resp.status_code == 404:
-                return False, "Репозиторий или релиз не найден"
-            if resp.status_code == 403:
-                return False, "Превышен лимит запросов GitHub"
             if resp.status_code != 200:
                 return False, f"Ошибка GitHub API: {resp.status_code}"
 
@@ -111,7 +101,9 @@ class UpdateManager:
 
             latest = latest_tag.lstrip("vV")
             if self.is_newer_version(latest, self.current_version):
-                download_url = rd.get("zipball_url") or rd.get("tarball_url")
+                # Используем zipball_url для скачивания исходников
+                download_url = rd.get("zipball_url")
+
                 info = {
                     "version": latest,
                     "download_url": download_url,
@@ -122,15 +114,11 @@ class UpdateManager:
             else:
                 return True, "up_to_date"
 
-        except requests.exceptions.Timeout:
-            return False, "Таймаут при проверке обновлений"
-        except requests.exceptions.ConnectionError:
-            return False, "Ошибка подключения к интернету"
         except Exception as e:
             return False, f"Ошибка при проверке обновлений: {e}"
 
     def is_newer_version(self, latest, current):
-        """Сравнение семантических версий (простое)"""
+        """Сравнение версий"""
         try:
             def parts(v):
                 return [int(x) for x in v.split(".") if x.isdigit()]
@@ -149,19 +137,20 @@ class UpdateManager:
             return latest != current
 
     def download_update(self, download_url):
-        """Скачать обновление в временную папку приложения."""
+        """Скачать обновление"""
         try:
             if not download_url:
                 return False, "URL для скачивания не указан"
 
             tmp = tempfile.mkdtemp()
-            zip_path = os.path.join(tmp, "update.zip")
+            zip_path = os.path.join(tmp, f"update_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip")
 
             headers = {"User-Agent": "DocumentFiller-Updater/1.0"}
             token = self.config.get("token", "").strip()
             if token and "api.github.com" in download_url:
                 headers["Authorization"] = f"token {token}"
 
+            print(f"Скачивание обновления с: {download_url}")
             with requests.get(download_url, headers=headers, stream=True, timeout=30) as r:
                 r.raise_for_status()
                 with open(zip_path, "wb") as f:
@@ -174,170 +163,267 @@ class UpdateManager:
             return False, f"Ошибка скачивания: {e}"
 
     def install_update(self, zip_path, update_info):
-        """Установить обновление из zip_path. update_info должен содержать 'version'."""
-        backup_made = False
+        """Установить обновление - СБОРКА EXE ИЗ ИСХОДНИКОВ"""
         try:
-            # 1) Создать резервную копию
-            backup_made = self.create_backup()
+            print(f"Начало установки обновления из: {zip_path}")
 
-            # 2) Распаковать zip в временную папку
+            # Создаем резервную копию
+            backup_made = self.create_backup()
+            if not backup_made:
+                print("Предупреждение: не удалось создать резервную копию")
+
+            # Распаковываем архив
             extract_dir = tempfile.mkdtemp()
+            print(f"Распаковка в: {extract_dir}")
             with zipfile.ZipFile(zip_path, "r") as z:
                 z.extractall(extract_dir)
 
-            # 3) Найти папку с содержимым релиза (обычно первая папка)
-            entries = [p for p in os.listdir(extract_dir) if os.path.isdir(os.path.join(extract_dir, p))]
+            # Находим корневую папку с обновлением
+            entries = [p for p in os.listdir(extract_dir)
+                       if os.path.isdir(os.path.join(extract_dir, p))]
+
             if not entries:
                 return False, "Архив обновления не содержит файлов"
 
             update_root = os.path.join(extract_dir, entries[0])
+            print(f"Корень обновления: {update_root}")
 
-            # Иногда в релизе есть лишняя вложенность — спускаемся, если очевидно
-            while True:
-                subdirs = [d for d in os.listdir(update_root) if os.path.isdir(os.path.join(update_root, d))]
-                # Если одна папка и в ней нет файлов проекта — углубляемся
-                if len(subdirs) == 1 and not any(name.lower().endswith(".py") or name.lower().endswith(".exe") for name in os.listdir(update_root)):
-                    update_root = os.path.join(update_root, subdirs[0])
-                else:
-                    break
+            # Собираем EXE из исходников
+            print("Сборка нового EXE из исходников...")
+            build_success, build_message = self.build_exe_from_source(update_root)
 
-            # 4) Скопировать файлы в локальную временную папку внутри приложения (чтобы bat мог их применить)
-            # Удаляем предыдущую локальную tmp, если есть
-            try:
-                if os.path.exists(self.local_tmp):
-                    shutil.rmtree(self.local_tmp)
-                shutil.copytree(update_root, self.local_tmp)
-            except Exception as e:
-                # fallback: копировать по файлам
-                os.makedirs(self.local_tmp, exist_ok=True)
-                for root, dirs, files in os.walk(update_root):
-                    rel = os.path.relpath(root, update_root)
-                    dst_dir = os.path.join(self.local_tmp, rel) if rel != "." else self.local_tmp
-                    os.makedirs(dst_dir, exist_ok=True)
-                    for f in files:
-                        shutil.copy2(os.path.join(root, f), os.path.join(dst_dir, f))
+            if not build_success:
+                return False, f"Ошибка сборки EXE: {build_message}"
 
-            # 5) Если запущены как собранный exe — сделать bat-обновление
-            if getattr(sys, "frozen", False):
-                # Создать run_updater.bat в папке приложения
-                bat_path = os.path.join(self.script_dir, "run_updater.bat")
-                # Используем robocopy для надежного копирования (robocopy есть в Windows)
-                # bat: дождаться закрытия процесса, затем зеркально скопировать из __update_tmp в app dir, запустить exe, удалить временные файлы и сам bat
-                bat_content = f"""@echo off
-REM Небольшая пауза — даем основному процессу завершиться
-timeout /t 2 /nobreak >nul
-REM Пробуем принудительно завершить процесс на случай, если он ещё удерживает файлы
+            # Создаем bat файл для применения обновления
+            bat_content = f"""@echo off
+chcp 65001 >nul
+title Обновление DocumentFiller
+echo =======================================
+echo    Установка обновления DocumentFiller
+echo =======================================
+echo.
+
+echo [1/5] Ожидание завершения текущей программы...
+timeout /t 5 /nobreak >nul
+
+echo [2/5] Завершение процесса {self.exe_name}...
 taskkill /f /im "{self.exe_name}" >nul 2>&1
-REM Копируем (зеркально) обновлённые файлы в папку приложения
-robocopy "%~dp0__update_tmp" "%~dp0" /MIR /NFL /NDL /NJH /NJS /R:3 /W:2
-REM Запускаем приложение (если exe есть)
-if exist "%~dp0{self.exe_name}" (
-    start "" "%~dp0{self.exe_name}"
-)
-REM Удаляем временную папку
-rmdir /s /q "%~dp0__update_tmp"
-REM Удаляем сам bat
-del /q "%~f0"
+
+echo [3/5] Применение обновления...
+REM Удаляем старые файлы (кроме пользовательских данных)
+del /q "{os.path.join(self.script_dir, '*.py')}" >nul 2>&1
+del /q "{os.path.join(self.script_dir, '*.spec')}" >nul 2>&1
+
+REM Копируем новые файлы
+xcopy "{update_root}\\*" "{self.script_dir}\\" /Y /E /H /I >nul 2>&1
+
+REM Копируем собранный EXE
+copy "{os.path.join(update_root, 'dist', 'DocumentFiller', self.exe_name)}" "{self.script_dir}\\" >nul 2>&1
+
+echo [4/5] Очистка временных файлов...
+rmdir /s /q "{extract_dir}" >nul 2>&1
+del /q "{zip_path}" >nul 2>&1
+
+echo [5/5] Запуск обновленной программы...
+start "" "{os.path.join(self.script_dir, self.exe_name)}"
+
+echo Обновление успешно завершено!
+timeout /t 2 >nul
+del /q "%~f0" >nul 2>&1
 """
-                with open(bat_path, "w", encoding="utf-8") as f:
-                    f.write(bat_content)
 
-                # Запускаем bat и завершаем текущий процесс, чтобы bat мог заменить exe
-                # Используем creationflags=subprocess.CREATE_NEW_CONSOLE чтобы bat мог выполняться независимо
-                try:
-                    subprocess.Popen([bat_path], cwd=self.script_dir, shell=True)
-                except Exception:
-                    # fallback: запуск через cmd
-                    subprocess.Popen(["cmd", "/c", bat_path], cwd=self.script_dir)
-                # Обновление будет выполнено внешним bat — завершаем текущий процесс
-                sys.exit(0)
+            bat_path = os.path.join(self.script_dir, "apply_update.bat")
+            with open(bat_path, "w", encoding="utf-8") as f:
+                f.write(bat_content)
 
-            else:
-                # Запущено как скрипт — можно копировать прямо сейчас
-                self.copy_update_files(self.local_tmp, self.script_dir)
-
-                # Обновляем version_config.json на новую версию
-                if update_info and update_info.get("version"):
-                    self._write_version(update_info["version"])
-
-                # Перезапускаем скрипт (python main.py)
-                try:
-                    python = sys.executable
-                    main_script = os.path.join(self.script_dir, "main.py")
-                    subprocess.Popen([python, main_script], cwd=self.script_dir)
-                    sys.exit(0)
-                except Exception as e:
-                    return True, "Обновление установлено, но не удалось перезапустить приложение: " + str(e)
-
-            # Если пришли сюда — значит bat будет заниматься остальным
-            # Запишем версию в config (чтобы при старте новая версия считалась актуальной)
+            # Обновляем версию в конфиге
             if update_info and update_info.get("version"):
                 self._write_version(update_info["version"])
 
-            return True, "Обновление установлено (через внешний апдейтер)"
+            print("Запуск BAT файла для применения обновления...")
+            # Запускаем bat файл
+            subprocess.Popen([bat_path], cwd=self.script_dir, shell=True)
+
+            # Завершаем текущее приложение
+            sys.exit(0)
+
+            return True, "Запущена установка обновления"
+
         except Exception as e:
-            # В случае ошибки — пытаемся восстановить
+            error_msg = f"Ошибка установки обновления: {e}"
+            print(error_msg)
+            # Пытаемся восстановить из резервной копии
             if backup_made:
                 self.restore_backup()
-            return False, f"Ошибка установки обновления: {e}"
-        finally:
-            # очищаем загруженный zip и временную распаковку
-            try:
-                if os.path.exists(zip_path):
-                    os.remove(zip_path)
-            except:
-                pass
+            return False, error_msg
 
-    def copy_update_files(self, source_dir, target_dir):
-        """Копирует файлы обновления в целевую папку, сохраняя пользовательские файлы."""
-        exclude = {
-            "backups",
-            "Шаблоны",
-            "анкеты_данные.xlsx",
-            "license.json",
-            "repo_config.json",
-            "version_config.json",
-            "settings.ini",
-            "update.log",
-            "__pycache__",
-            ".git"
-        }
+    def build_exe_from_source(self, source_dir):
+        """Собрать EXE из исходников"""
+        try:
+            print("Начало сборки EXE из исходников...")
 
-        for root, dirs, files in os.walk(source_dir):
-            rel = os.path.relpath(root, source_dir)
-            dest_root = os.path.join(target_dir, rel) if rel != "." else target_dir
+            # Проверяем наличие необходимых файлов
+            required_files = ['main.py', 'main_window.py', 'settings.py', 'theme_manager.py']
+            missing_files = []
+            for file in required_files:
+                if not os.path.exists(os.path.join(source_dir, file)):
+                    missing_files.append(file)
 
-            # Создаём папку назначения если не существует
-            os.makedirs(dest_root, exist_ok=True)
+            if missing_files:
+                return False, f"Отсутствуют необходимые файлы: {missing_files}"
 
-            # Список папок для прохода: исключаем папки-исключения
-            dirs[:] = [d for d in dirs if d not in exclude]
+            # Создаем spec файл для сборки
+            spec_content = self.create_spec_file()
+            spec_path = os.path.join(source_dir, 'document_filler.spec')
+            with open(spec_path, 'w', encoding='utf-8') as f:
+                f.write(spec_content)
 
-            for f in files:
-                if f in exclude:
-                    continue
-                src_file = os.path.join(root, f)
-                dst_file = os.path.join(dest_root, f)
+            # Собираем EXE с помощью PyInstaller
+            print("Запуск PyInstaller...")
+            build_cmd = [
+                sys.executable, '-m', 'PyInstaller',
+                'document_filler.spec',
+                '--clean',
+                '--noconfirm'
+            ]
+
+            # Если запущены из EXE, используем Python из временной папки
+            if getattr(sys, "frozen", False):
+                # Пытаемся найти Python в системе
+                python_path = self.find_python()
+                if python_path:
+                    build_cmd[0] = python_path
+
+            result = subprocess.run(
+                build_cmd,
+                cwd=source_dir,
+                capture_output=True,
+                text=True,
+                timeout=300  # 5 минут таймаут
+            )
+
+            if result.returncode != 0:
+                error_msg = f"Ошибка сборки: {result.stderr}"
+                print(f"STDOUT: {result.stdout}")
+                print(f"STDERR: {result.stderr}")
+                return False, error_msg
+
+            # Проверяем, что EXE создан
+            exe_path = os.path.join(source_dir, 'dist', 'DocumentFiller', self.exe_name)
+            if not os.path.exists(exe_path):
+                return False, "EXE файл не создан после сборки"
+
+            print(f"EXE успешно собран: {exe_path}")
+            return True, "Сборка завершена успешно"
+
+        except subprocess.TimeoutExpired:
+            return False, "Таймаут при сборке EXE (более 5 минут)"
+        except Exception as e:
+            return False, f"Ошибка при сборке EXE: {e}"
+
+    def find_python(self):
+        """Найти Python в системе"""
+        try:
+            # Пробуем разные варианты
+            possible_paths = [
+                "python",
+                "python3",
+                "py",
+                r"C:\Python39\python.exe",
+                r"C:\Python310\python.exe",
+                r"C:\Python311\python.exe",
+                r"C:\Program Files\Python39\python.exe",
+                r"C:\Program Files\Python310\python.exe",
+                r"C:\Program Files\Python311\python.exe",
+            ]
+
+            for path in possible_paths:
                 try:
-                    # Если файл существует и это важный пользовательский файл — пропускаем перезапись
-                    if os.path.exists(dst_file):
-                        # Не перезаписываем пользовательские файлы из exclude
-                        if os.path.basename(dst_file) in ("анкеты_данные.xlsx", "license.json", "settings.ini"):
-                            # пропускаем
-                            print(f"Пропуск пользовательского файла: {dst_file}")
-                            continue
-                        # Иначе удалим и запишем новую версию
-                        try:
-                            if os.path.isdir(dst_file):
-                                shutil.rmtree(dst_file)
-                            else:
-                                os.remove(dst_file)
-                        except Exception:
-                            pass
-                    shutil.copy2(src_file, dst_file)
-                    print(f"Скопирован {dst_file}")
-                except Exception as e:
-                    print(f"Ошибка копирования {src_file} -> {dst_file}: {e}")
+                    result = subprocess.run([path, "--version"], capture_output=True, timeout=5)
+                    if result.returncode == 0:
+                        print(f"Найден Python: {path}")
+                        return path
+                except:
+                    continue
+
+            return None
+        except Exception as e:
+            print(f"Ошибка поиска Python: {e}")
+            return None
+
+    def create_spec_file(self):
+        """Создать spec файл для сборки"""
+        return '''# -*- mode: python ; coding: utf-8 -*-
+
+block_cipher = None
+
+a = Analysis(
+    ['main.py'],
+    pathex=[],
+    binaries=[],
+    datas=[
+        ('version_config.json', '.'),
+        ('repo_config.json', '.'),
+        ('Шаблоны', 'Шаблоны')
+    ],
+    hiddenimports=[
+        'main_window', 'settings', 'theme_manager', 
+        'license_manager', 'update_manager', 'widgets',
+        'PyQt5', 'PyQt5.QtCore', 'PyQt5.QtGui', 'PyQt5.QtWidgets', 'PyQt5.QtNetwork',
+        'openpyxl', 'docxtpl', 'jinja2', 'docx',
+        'lxml', 'lxml.etree', 'lxml._elementpath',
+        'requests', 'urllib3', 'chardet', 'idna', 'certifi',
+        'email', 'email.mime', 'email.mime.text', 'email.mime.multipart',
+        'email.mime.base', 'email.encoders', 'email.utils',
+    ],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
+    cipher=block_cipher,
+    noarchive=False,
+    optimize=1,
+)
+
+pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    [],
+    name='DocumentFiller',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=False,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='DocumentFiller'
+)
+'''
 
     def _write_version(self, version_str):
         """Записать версию в version_config.json"""
@@ -356,21 +442,24 @@ del /q "%~f0"
             print(f"Не удалось обновить version_config.json: {e}")
 
     def create_backup(self):
-        """Создать резервную копию важных файлов перед обновлением."""
+        """Создать резервную копию"""
         try:
             backup_dir = os.path.join(self.script_dir, "backups")
             os.makedirs(backup_dir, exist_ok=True)
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             dest = os.path.join(backup_dir, f"backup_{ts}")
             os.makedirs(dest, exist_ok=True)
-            important = [
+
+            # Копируем важные файлы
+            important_files = [
                 "main.py", "main_window.py", "settings.py", "theme_manager.py",
                 "widgets.py", "update_manager.py", "license_manager.py",
                 "version_config.json", "repo_config.json", "анкеты_данные.xlsx",
                 "license.json", self.exe_name
             ]
+
             copied = 0
-            for name in important:
+            for name in important_files:
                 src = os.path.join(self.script_dir, name)
                 if os.path.exists(src):
                     try:
@@ -379,16 +468,17 @@ del /q "%~f0"
                         else:
                             shutil.copy2(src, os.path.join(dest, name))
                         copied += 1
-                    except Exception:
-                        pass
-            print(f"Резервная копия создана: {dest} ({copied} файлов/папок)")
+                    except Exception as e:
+                        print(f"Ошибка копирования {name}: {e}")
+
+            print(f"Резервная копия создана: {dest} ({copied} файлов)")
             return True
         except Exception as e:
             print(f"Ошибка создания резервной копии: {e}")
             return False
 
     def restore_backup(self):
-        """Восстановление из последней резервной копии."""
+        """Восстановление из резервной копии"""
         try:
             backup_dir = os.path.join(self.script_dir, "backups")
             if not os.path.exists(backup_dir):
@@ -400,6 +490,7 @@ del /q "%~f0"
 
             latest = sorted(backups)[-1]
             path = os.path.join(backup_dir, latest)
+
             restored = 0
             for item in os.listdir(path):
                 src = os.path.join(path, item)
@@ -417,19 +508,24 @@ del /q "%~f0"
                     restored += 1
                 except Exception as e:
                     print(f"Ошибка восстановления {item}: {e}")
+
             print(f"Восстановлено {restored} файлов из {latest}")
-            return True, f"Восстановлено {restored}"
+            return True, f"Восстановлено {restored} файлов"
         except Exception as e:
             return False, f"Ошибка восстановления: {e}"
 
     def download_and_install_update(self, update_info):
-        """Управляет полным циклом: download -> install"""
+        """Полный цикл обновления"""
         try:
+            print("Начало процесса обновления...")
+
             ok, result = self.download_update(update_info.get("download_url"))
             if not ok:
                 return False, result
+
             zip_path = result
             return self.install_update(zip_path, update_info)
+
         except Exception as e:
             return False, f"Ошибка обновления: {e}"
 
@@ -441,13 +537,20 @@ del /q "%~f0"
             "branch": self.config.get("branch", "main")
         }
 
-# Пример использования:
-# if __name__ == "__main__":
-#     um = UpdateManager(exe_name="DocumentFiller.exe")
-#     ok, res = um.check_for_updates()
-#     if ok and res != "up_to_date":
-#         print("Есть обновление:", res["version"])
-#         ok2, msg = um.download_and_install_update(res)
-#         print(ok2, msg)
-#     else:
-#         print("Обновлений нет или ошибка:", res)
+    def restart_program(self):
+        """Перезапуск программы"""
+        try:
+            if getattr(sys, "frozen", False):
+                # Для собранного EXE
+                exe_path = os.path.join(self.script_dir, self.exe_name)
+                if os.path.exists(exe_path):
+                    subprocess.Popen([exe_path], cwd=self.script_dir)
+                    sys.exit(0)
+            else:
+                # Для скрипта Python
+                python = sys.executable
+                main_script = os.path.join(self.script_dir, "main.py")
+                subprocess.Popen([python, main_script], cwd=self.script_dir)
+                sys.exit(0)
+        except Exception as e:
+            print(f"Ошибка перезапуска: {e}")
