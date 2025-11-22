@@ -1,34 +1,41 @@
-# update_manager.py - улучшенная версия с обработкой отсутствия репозитория
-import requests
-import json
+# update_manager.py
+# Улучшённый менеджер обновлений для DocumentFiller.exe
+# Поддерживает безопасное обновление EXE через временный bat (Windows).
+# Работает в режиме frozen (собранный exe) и в режиме скрипта.
+
 import os
 import sys
-import zipfile
+import json
 import shutil
 import tempfile
+import zipfile
+import requests
+import subprocess
 from pathlib import Path
 from datetime import datetime
 
-
 class UpdateManager:
-    def __init__(self):
+    def __init__(self, exe_name="DocumentFiller.exe"):
+        self.exe_name = exe_name
         self.script_dir = self.get_script_dir()
         self.config = self.load_config()
         self.current_version = self.get_current_version()
+        # Папка для временных операций внутри директории приложения
+        self.local_tmp = os.path.join(self.script_dir, "__update_tmp")
+        os.makedirs(self.local_tmp, exist_ok=True)
 
     def get_script_dir(self):
-        """Получить директорию скрипта"""
-        if getattr(sys, 'frozen', False):
+        """Возвращает директорию приложения (где лежит exe или скрипт)."""
+        if getattr(sys, "frozen", False):
             return os.path.dirname(sys.executable)
         else:
             return os.path.dirname(os.path.abspath(__file__))
 
     def load_config(self):
-        """Загрузить конфигурацию"""
+        """Загрузить repo_config.json (если нет — создать дефолт)."""
         try:
-            config_path = os.path.join(self.script_dir, 'repo_config.json')
+            config_path = os.path.join(self.script_dir, "repo_config.json")
             if not os.path.exists(config_path):
-                # Создаем конфиг по умолчанию если не существует
                 default_config = {
                     "type": "github",
                     "owner": "",
@@ -37,94 +44,81 @@ class UpdateManager:
                     "token": "",
                     "update_channel": "stable"
                 }
-                with open(config_path, 'w', encoding='utf-8') as f:
+                with open(config_path, "w", encoding="utf-8") as f:
                     json.dump(default_config, f, indent=2, ensure_ascii=False)
                 return default_config
 
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-
-            # Проверяем обязательные поля
-            if not config.get('owner') or not config.get('repo'):
-                print("⚠️ Внимание: репозиторий не настроен в repo_config.json")
-                print("   Заполните поля 'owner' и 'repo' для проверки обновлений")
-
-            return config
+            with open(config_path, "r", encoding="utf-8") as f:
+                return json.load(f)
 
         except Exception as e:
-            print(f"❌ Ошибка загрузки конфигурации: {e}")
+            print(f"Ошибка загрузки repo_config.json: {e}")
             return {}
 
     def get_current_version(self):
-        """Получить текущую версию"""
+        """Чтение текущей версии из version_config.json (или создание дефолтной)."""
         try:
-            version_path = os.path.join(self.script_dir, 'version_config.json')
+            version_path = os.path.join(self.script_dir, "version_config.json")
             if not os.path.exists(version_path):
-                # Создаем версию по умолчанию если не существует
-                default_version = {
+                default_ver = {
                     "current_version": "1.0.0",
                     "update_url": "",
                     "check_updates_on_start": False,
                     "update_channel": "stable"
                 }
-                with open(version_path, 'w', encoding='utf-8') as f:
-                    json.dump(default_version, f, indent=2, ensure_ascii=False)
-                return '1.0.0'
+                with open(version_path, "w", encoding="utf-8") as f:
+                    json.dump(default_ver, f, indent=2, ensure_ascii=False)
+                return default_ver["current_version"]
 
-            with open(version_path, 'r', encoding='utf-8') as f:
-                version_data = json.load(f)
-                return version_data.get('current_version', '1.0.0')
+            with open(version_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data.get("current_version", "1.0.0")
         except Exception as e:
-            print(f"❌ Ошибка получения версии: {e}")
-            return '1.0.0'
+            print(f"Ошибка чтения версии: {e}")
+            return "1.0.0"
 
     def is_repository_configured(self):
-        """Проверить, настроен ли репозиторий"""
-        return bool(self.config.get('owner') and self.config.get('repo'))
+        return bool(self.config.get("owner") and self.config.get("repo"))
 
     def check_for_updates(self):
-        """Проверить наличие обновлений через GitHub API"""
+        """Проверяет GitHub Releases и возвращает (True, update_info) если доступно обновление,
+           или (True, "up_to_date") если нет, или (False, error_message)."""
         try:
-            # Проверяем настройки репозитория
             if not self.is_repository_configured():
                 return False, "Репозиторий не настроен"
 
-            owner = self.config.get('owner', '')
-            repo = self.config.get('repo', '')
+            owner = self.config.get("owner")
+            repo = self.config.get("repo")
+            token = self.config.get("token", "").strip()
 
-            if not owner or not repo:
-                return False, "Репозиторий не настроен"
-
-            # URL для получения последнего релиза
             url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
-
-            # Делаем запрос к GitHub API
-            headers = {'User-Agent': 'DocumentFiller/1.0'}
-            token = self.config.get('token')
+            headers = {"User-Agent": "DocumentFiller-Updater/1.0"}
             if token:
-                headers['Authorization'] = f'token {token}'
+                headers["Authorization"] = f"token {token}"
 
-            response = requests.get(url, headers=headers, timeout=10)
+            resp = requests.get(url, headers=headers, timeout=10)
+            if resp.status_code == 404:
+                return False, "Репозиторий или релиз не найден"
+            if resp.status_code == 403:
+                return False, "Превышен лимит запросов GitHub"
+            if resp.status_code != 200:
+                return False, f"Ошибка GitHub API: {resp.status_code}"
 
-            if response.status_code == 404:
-                return False, "Репозиторий или релизы не найдены"
-            elif response.status_code == 403:
-                return False, "Превышен лимит запросов"
-            elif response.status_code != 200:
-                return False, f"Ошибка GitHub API: {response.status_code}"
+            rd = resp.json()
+            latest_tag = rd.get("tag_name") or rd.get("name")
+            if not latest_tag:
+                return False, "Не удалось определить версию в релизе"
 
-            release_data = response.json()
-            latest_version = release_data['tag_name']
-
-            # Сравниваем версии
-            if self.is_newer_version(latest_version, self.current_version):
-                update_info = {
-                    'version': latest_version,
-                    'download_url': release_data.get('zipball_url'),
-                    'release_notes': release_data.get('body', ''),
-                    'published_at': release_data.get('published_at', '')
+            latest = latest_tag.lstrip("vV")
+            if self.is_newer_version(latest, self.current_version):
+                download_url = rd.get("zipball_url") or rd.get("tarball_url")
+                info = {
+                    "version": latest,
+                    "download_url": download_url,
+                    "release_notes": rd.get("body", ""),
+                    "published_at": rd.get("published_at", "")
                 }
-                return True, update_info
+                return True, info
             else:
                 return True, "up_to_date"
 
@@ -133,332 +127,327 @@ class UpdateManager:
         except requests.exceptions.ConnectionError:
             return False, "Ошибка подключения к интернету"
         except Exception as e:
-            return False, f"Ошибка при проверке обновлений: {str(e)}"
+            return False, f"Ошибка при проверке обновлений: {e}"
 
     def is_newer_version(self, latest, current):
-        """Сравнить версии"""
+        """Сравнение семантических версий (простое)"""
         try:
-            # Убираем 'v' из версий если есть
-            latest = latest.lstrip('vV')
-            current = current.lstrip('vV')
+            def parts(v):
+                return [int(x) for x in v.split(".") if x.isdigit()]
 
-            latest_parts = [int(x) for x in latest.split('.')]
-            current_parts = [int(x) for x in current.split('.')]
-
-            # Сравниваем по частям
-            for i in range(max(len(latest_parts), len(current_parts))):
-                latest_num = latest_parts[i] if i < len(latest_parts) else 0
-                current_num = current_parts[i] if i < len(current_parts) else 0
-
-                if latest_num > current_num:
+            lp = parts(latest)
+            cp = parts(current)
+            for i in range(max(len(lp), len(cp))):
+                lv = lp[i] if i < len(lp) else 0
+                cv = cp[i] if i < len(cp) else 0
+                if lv > cv:
                     return True
-                elif latest_num < current_num:
+                if lv < cv:
                     return False
-
-            return False  # Версии одинаковые
+            return False
         except:
-            # Если не удалось сравнить, считаем что есть обновление
             return latest != current
 
     def download_update(self, download_url):
-        """Скачать обновление"""
+        """Скачать обновление в временную папку приложения."""
         try:
-            # Создаем временную папку
-            temp_dir = tempfile.mkdtemp()
-            zip_path = os.path.join(temp_dir, 'update.zip')
+            if not download_url:
+                return False, "URL для скачивания не указан"
 
-            print(f"📥 Скачивание обновления: {download_url}")
+            tmp = tempfile.mkdtemp()
+            zip_path = os.path.join(tmp, "update.zip")
 
-            headers = {}
-            token = self.config.get('token')
-            if token and 'api.github.com' in download_url:
-                headers['Authorization'] = f'token {token}'
+            headers = {"User-Agent": "DocumentFiller-Updater/1.0"}
+            token = self.config.get("token", "").strip()
+            if token and "api.github.com" in download_url:
+                headers["Authorization"] = f"token {token}"
 
-            # Скачиваем архив
-            response = requests.get(download_url, headers=headers, stream=True, timeout=30)
-            response.raise_for_status()
+            with requests.get(download_url, headers=headers, stream=True, timeout=30) as r:
+                r.raise_for_status()
+                with open(zip_path, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
 
-            with open(zip_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-
-            print("✅ Обновление скачано успешно")
             return True, zip_path
-
         except Exception as e:
-            return False, f"Ошибка скачивания: {str(e)}"
+            return False, f"Ошибка скачивания: {e}"
 
-    def install_update(self, zip_path):
-        """Установить обновление"""
+    def install_update(self, zip_path, update_info):
+        """Установить обновление из zip_path. update_info должен содержать 'version'."""
+        backup_made = False
         try:
-            # Создаем резервную копию
-            backup_success = self.create_backup()
+            # 1) Создать резервную копию
+            backup_made = self.create_backup()
 
-            # Создаем временную папку для распаковки
+            # 2) Распаковать zip в временную папку
             extract_dir = tempfile.mkdtemp()
+            with zipfile.ZipFile(zip_path, "r") as z:
+                z.extractall(extract_dir)
 
-            print(f"📦 Распаковка обновления в: {extract_dir}")
+            # 3) Найти папку с содержимым релиза (обычно первая папка)
+            entries = [p for p in os.listdir(extract_dir) if os.path.isdir(os.path.join(extract_dir, p))]
+            if not entries:
+                return False, "Архив обновления не содержит файлов"
 
-            # Распаковываем архив
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(extract_dir)
+            update_root = os.path.join(extract_dir, entries[0])
 
-            # В распакованной папке будет подпапка вида owner-repo-commitHash/
-            extracted_folders = [f for f in os.listdir(extract_dir)
-                                 if os.path.isdir(os.path.join(extract_dir, f))]
-
-            if not extracted_folders:
-                return False, "Не удалось найти файлы в архиве"
-
-            update_files_dir = os.path.join(extract_dir, extracted_folders[0])
-
-            # ВАЖНОЕ ИСПРАВЛЕНИЕ: Проверяем структуру папок
-            # Иногда в архиве может быть дополнительная вложенность
+            # Иногда в релизе есть лишняя вложенность — спускаемся, если очевидно
             while True:
-                sub_folders = [f for f in os.listdir(update_files_dir)
-                               if os.path.isdir(os.path.join(update_files_dir, f))]
-                # Если есть только одна папка и это не очевидная папка проекта, заходим глубже
-                if len(sub_folders) == 1 and not any(
-                        name in sub_folders[0].lower() for name in ['src', 'main', 'documentfiller']):
-                    update_files_dir = os.path.join(update_files_dir, sub_folders[0])
+                subdirs = [d for d in os.listdir(update_root) if os.path.isdir(os.path.join(update_root, d))]
+                # Если одна папка и в ней нет файлов проекта — углубляемся
+                if len(subdirs) == 1 and not any(name.lower().endswith(".py") or name.lower().endswith(".exe") for name in os.listdir(update_root)):
+                    update_root = os.path.join(update_root, subdirs[0])
                 else:
                     break
 
-            print(f"🔄 Копирование файлов из: {update_files_dir}")
-
-            # Копируем файлы обновления с сохранением пользовательских данных
-            self.copy_update_files(update_files_dir, self.script_dir)
-
-            # Обновляем версию в конфиге
-            self.update_version_config()
-
-            # Очищаем временные файлы
-            shutil.rmtree(extract_dir, ignore_errors=True)
+            # 4) Скопировать файлы в локальную временную папку внутри приложения (чтобы bat мог их применить)
+            # Удаляем предыдущую локальную tmp, если есть
             try:
-                os.unlink(zip_path)
+                if os.path.exists(self.local_tmp):
+                    shutil.rmtree(self.local_tmp)
+                shutil.copytree(update_root, self.local_tmp)
+            except Exception as e:
+                # fallback: копировать по файлам
+                os.makedirs(self.local_tmp, exist_ok=True)
+                for root, dirs, files in os.walk(update_root):
+                    rel = os.path.relpath(root, update_root)
+                    dst_dir = os.path.join(self.local_tmp, rel) if rel != "." else self.local_tmp
+                    os.makedirs(dst_dir, exist_ok=True)
+                    for f in files:
+                        shutil.copy2(os.path.join(root, f), os.path.join(dst_dir, f))
+
+            # 5) Если запущены как собранный exe — сделать bat-обновление
+            if getattr(sys, "frozen", False):
+                # Создать run_updater.bat в папке приложения
+                bat_path = os.path.join(self.script_dir, "run_updater.bat")
+                # Используем robocopy для надежного копирования (robocopy есть в Windows)
+                # bat: дождаться закрытия процесса, затем зеркально скопировать из __update_tmp в app dir, запустить exe, удалить временные файлы и сам bat
+                bat_content = f"""@echo off
+REM Небольшая пауза — даем основному процессу завершиться
+timeout /t 2 /nobreak >nul
+REM Пробуем принудительно завершить процесс на случай, если он ещё удерживает файлы
+taskkill /f /im "{self.exe_name}" >nul 2>&1
+REM Копируем (зеркально) обновлённые файлы в папку приложения
+robocopy "%~dp0__update_tmp" "%~dp0" /MIR /NFL /NDL /NJH /NJS /R:3 /W:2
+REM Запускаем приложение (если exe есть)
+if exist "%~dp0{self.exe_name}" (
+    start "" "%~dp0{self.exe_name}"
+)
+REM Удаляем временную папку
+rmdir /s /q "%~dp0__update_tmp"
+REM Удаляем сам bat
+del /q "%~f0"
+"""
+                with open(bat_path, "w", encoding="utf-8") as f:
+                    f.write(bat_content)
+
+                # Запускаем bat и завершаем текущий процесс, чтобы bat мог заменить exe
+                # Используем creationflags=subprocess.CREATE_NEW_CONSOLE чтобы bat мог выполняться независимо
+                try:
+                    subprocess.Popen([bat_path], cwd=self.script_dir, shell=True)
+                except Exception:
+                    # fallback: запуск через cmd
+                    subprocess.Popen(["cmd", "/c", bat_path], cwd=self.script_dir)
+                # Обновление будет выполнено внешним bat — завершаем текущий процесс
+                sys.exit(0)
+
+            else:
+                # Запущено как скрипт — можно копировать прямо сейчас
+                self.copy_update_files(self.local_tmp, self.script_dir)
+
+                # Обновляем version_config.json на новую версию
+                if update_info and update_info.get("version"):
+                    self._write_version(update_info["version"])
+
+                # Перезапускаем скрипт (python main.py)
+                try:
+                    python = sys.executable
+                    main_script = os.path.join(self.script_dir, "main.py")
+                    subprocess.Popen([python, main_script], cwd=self.script_dir)
+                    sys.exit(0)
+                except Exception as e:
+                    return True, "Обновление установлено, но не удалось перезапустить приложение: " + str(e)
+
+            # Если пришли сюда — значит bat будет заниматься остальным
+            # Запишем версию в config (чтобы при старте новая версия считалась актуальной)
+            if update_info and update_info.get("version"):
+                self._write_version(update_info["version"])
+
+            return True, "Обновление установлено (через внешний апдейтер)"
+        except Exception as e:
+            # В случае ошибки — пытаемся восстановить
+            if backup_made:
+                self.restore_backup()
+            return False, f"Ошибка установки обновления: {e}"
+        finally:
+            # очищаем загруженный zip и временную распаковку
+            try:
+                if os.path.exists(zip_path):
+                    os.remove(zip_path)
             except:
                 pass
 
-            print("✅ Обновление установлено успешно")
-            return True, "Обновление успешно установлено"
-
-        except Exception as e:
-            # Восстанавливаем из резервной копии при ошибке
-            if backup_success:
-                self.restore_backup()
-            return False, f"Ошибка установки обновления: {str(e)}"
-
     def copy_update_files(self, source_dir, target_dir):
-        """Скопировать файлы обновления, сохраняя пользовательские данные"""
-        # Файлы и папки которые НЕ нужно перезаписывать
-        exclude = [
-            'backups',
-            'документы',
-            'анкеты_данные.xlsx',
-            'license.json',
-            'settings.ini',
-            'repo_config.json',  # Сохраняем настройки репозитория
-            'version_config.json',  # Обновим отдельно
-            'update.log',
-            '__pycache__',
-            '.git',
-            'Шаблоны'  # Сохраняем пользовательские шаблоны
-        ]
+        """Копирует файлы обновления в целевую папку, сохраняя пользовательские файлы."""
+        exclude = {
+            "backups",
+            "Шаблоны",
+            "анкеты_данные.xlsx",
+            "license.json",
+            "repo_config.json",
+            "version_config.json",
+            "settings.ini",
+            "update.log",
+            "__pycache__",
+            ".git"
+        }
 
-        for item in os.listdir(source_dir):
-            if item in exclude:
-                print(f"⏩ Пропуск: {item}")
-                continue
+        for root, dirs, files in os.walk(source_dir):
+            rel = os.path.relpath(root, source_dir)
+            dest_root = os.path.join(target_dir, rel) if rel != "." else target_dir
 
-            source_path = os.path.join(source_dir, item)
-            target_path = os.path.join(target_dir, item)
+            # Создаём папку назначения если не существует
+            os.makedirs(dest_root, exist_ok=True)
 
-            try:
-                if os.path.isdir(source_path):
-                    if os.path.exists(target_path):
-                        # Для папок: копируем содержимое, но не перезаписываем существующие пользовательские файлы
-                        for sub_item in os.listdir(source_path):
-                            sub_source = os.path.join(source_path, sub_item)
-                            sub_target = os.path.join(target_path, sub_item)
+            # Список папок для прохода: исключаем папки-исключения
+            dirs[:] = [d for d in dirs if d not in exclude]
 
-                            if os.path.exists(sub_target):
-                                if os.path.isdir(sub_target):
-                                    shutil.rmtree(sub_target)
-                                else:
-                                    os.remove(sub_target)
-
-                            if os.path.isdir(sub_source):
-                                shutil.copytree(sub_source, sub_target)
+            for f in files:
+                if f in exclude:
+                    continue
+                src_file = os.path.join(root, f)
+                dst_file = os.path.join(dest_root, f)
+                try:
+                    # Если файл существует и это важный пользовательский файл — пропускаем перезапись
+                    if os.path.exists(dst_file):
+                        # Не перезаписываем пользовательские файлы из exclude
+                        if os.path.basename(dst_file) in ("анкеты_данные.xlsx", "license.json", "settings.ini"):
+                            # пропускаем
+                            print(f"Пропуск пользовательского файла: {dst_file}")
+                            continue
+                        # Иначе удалим и запишем новую версию
+                        try:
+                            if os.path.isdir(dst_file):
+                                shutil.rmtree(dst_file)
                             else:
-                                shutil.copy2(sub_source, sub_target)
-                    else:
-                        shutil.copytree(source_path, target_path)
-                else:
-                    if os.path.exists(target_path):
-                        os.remove(target_path)
-                    shutil.copy2(source_path, target_path)
+                                os.remove(dst_file)
+                        except Exception:
+                            pass
+                    shutil.copy2(src_file, dst_file)
+                    print(f"Скопирован {dst_file}")
+                except Exception as e:
+                    print(f"Ошибка копирования {src_file} -> {dst_file}: {e}")
 
-                print(f"✅ Скопирован: {item}")
-
-            except Exception as e:
-                print(f"❌ Ошибка копирования {item}: {e}")
-
-    def update_version_config(self):
-        """Обновить версию в конфиге после успешного обновления"""
+    def _write_version(self, version_str):
+        """Записать версию в version_config.json"""
         try:
-            # После успешного обновления обновляем версию
-            version_path = os.path.join(self.script_dir, 'version_config.json')
-            if os.path.exists(version_path):
-                with open(version_path, 'r', encoding='utf-8') as f:
-                    version_data = json.load(f)
-
-                # Получаем актуальную версию из релиза
-                success, result = self.check_for_updates()
-                if success and result != "up_to_date":
-                    version_data['current_version'] = result['version'].lstrip('vV')
-
-                    with open(version_path, 'w', encoding='utf-8') as f:
-                        json.dump(version_data, f, indent=2, ensure_ascii=False)
-
-                    print(f"✅ Версия обновлена до: {version_data['current_version']}")
+            vp = os.path.join(self.script_dir, "version_config.json")
+            data = {}
+            if os.path.exists(vp):
+                with open(vp, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            data["current_version"] = version_str.lstrip("vV")
+            with open(vp, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            print(f"Версия обновлена до {data['current_version']}")
+            self.current_version = data["current_version"]
         except Exception as e:
-            print(f"⚠️ Ошибка обновления версии: {e}")
+            print(f"Не удалось обновить version_config.json: {e}")
 
     def create_backup(self):
-        """Создать резервную копию"""
+        """Создать резервную копию важных файлов перед обновлением."""
         try:
-            backup_dir = os.path.join(self.script_dir, 'backups')
+            backup_dir = os.path.join(self.script_dir, "backups")
             os.makedirs(backup_dir, exist_ok=True)
-
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_path = os.path.join(backup_dir, f'backup_{timestamp}')
-
-            # Копируем важные файлы
-            important_files = [
-                'main.py', 'main_window.py', 'settings.py',
-                'theme_manager.py', 'widgets.py', 'update_manager.py', 'license_manager.py',
-                'version_config.json', 'repo_config.json',
-                'анкеты_данные.xlsx', 'license.json'
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            dest = os.path.join(backup_dir, f"backup_{ts}")
+            os.makedirs(dest, exist_ok=True)
+            important = [
+                "main.py", "main_window.py", "settings.py", "theme_manager.py",
+                "widgets.py", "update_manager.py", "license_manager.py",
+                "version_config.json", "repo_config.json", "анкеты_данные.xlsx",
+                "license.json", self.exe_name
             ]
-
-            # Также копируем исполняемый файл если есть
-            if getattr(sys, 'frozen', False):
-                important_files.append(os.path.basename(sys.executable))
-
-            os.makedirs(backup_path, exist_ok=True)
-
-            copied_count = 0
-            for file in important_files:
-                src = os.path.join(self.script_dir, file)
+            copied = 0
+            for name in important:
+                src = os.path.join(self.script_dir, name)
                 if os.path.exists(src):
-                    shutil.copy2(src, backup_path)
-                    copied_count += 1
-
-            print(f"📂 Резервная копия создана: {backup_path} ({copied_count} файлов)")
+                    try:
+                        if os.path.isdir(src):
+                            shutil.copytree(src, os.path.join(dest, name))
+                        else:
+                            shutil.copy2(src, os.path.join(dest, name))
+                        copied += 1
+                    except Exception:
+                        pass
+            print(f"Резервная копия создана: {dest} ({copied} файлов/папок)")
             return True
-
         except Exception as e:
-            print(f"❌ Ошибка создания резервной копии: {e}")
+            print(f"Ошибка создания резервной копии: {e}")
             return False
 
     def restore_backup(self):
-        """Восстановить из резервной копии"""
+        """Восстановление из последней резервной копии."""
         try:
-            backup_dir = os.path.join(self.script_dir, 'backups')
+            backup_dir = os.path.join(self.script_dir, "backups")
             if not os.path.exists(backup_dir):
                 return False, "Папка backups не найдена"
 
-            # Находим последнюю резервную копию
-            backups = [d for d in os.listdir(backup_dir) if d.startswith('backup_')]
+            backups = [d for d in os.listdir(backup_dir) if d.startswith("backup_")]
             if not backups:
                 return False, "Резервные копии не найдены"
 
-            latest_backup = sorted(backups)[-1]
-            backup_path = os.path.join(backup_dir, latest_backup)
-
-            # Восстанавливаем файлы
-            restored_count = 0
-            for file in os.listdir(backup_path):
-                src = os.path.join(backup_path, file)
-                dst = os.path.join(self.script_dir, file)
-
+            latest = sorted(backups)[-1]
+            path = os.path.join(backup_dir, latest)
+            restored = 0
+            for item in os.listdir(path):
+                src = os.path.join(path, item)
+                dst = os.path.join(self.script_dir, item)
                 try:
                     if os.path.exists(dst):
                         if os.path.isdir(dst):
                             shutil.rmtree(dst)
                         else:
                             os.remove(dst)
-
-                    shutil.copy2(src, dst)
-                    restored_count += 1
-                    print(f"✅ Восстановлен: {file}")
-
+                    if os.path.isdir(src):
+                        shutil.copytree(src, dst)
+                    else:
+                        shutil.copy2(src, dst)
+                    restored += 1
                 except Exception as e:
-                    print(f"❌ Ошибка восстановления {file}: {e}")
-
-            print(f"🔄 Восстановлено из резервной копии: {latest_backup} ({restored_count} файлов)")
-            return True, f"Восстановлено {restored_count} файлов"
-
+                    print(f"Ошибка восстановления {item}: {e}")
+            print(f"Восстановлено {restored} файлов из {latest}")
+            return True, f"Восстановлено {restored}"
         except Exception as e:
-            print(f"❌ Ошибка восстановления из резервной копии: {e}")
-            return False, f"Ошибка восстановления: {str(e)}"
-
-    def restart_program(self):
-        """Перезапустить программу"""
-        try:
-            import subprocess
-            import time
-
-            # Даем время для закрытия основного процесса
-            time.sleep(2)
-
-            if getattr(sys, 'frozen', False):
-                # Если это собранное приложение
-                executable = sys.executable
-                subprocess.Popen([executable], cwd=self.script_dir)
-            else:
-                # Если это скрипт Python
-                script = os.path.join(self.script_dir, 'main.py')
-                subprocess.Popen([sys.executable, script], cwd=self.script_dir)
-
-            sys.exit(0)
-        except Exception as e:
-            print(f"❌ Ошибка перезапуска: {e}")
-
-    def auto_update_from_repo(self):
-        """Автоматическое обновление из репозитория"""
-        try:
-            success, result = self.check_for_updates()
-            if success and result != "up_to_date":
-                print("🔄 Найдены обновления, начинаем установку...")
-                return self.download_and_install_update(result)
-            return success, "Обновлений не найдено" if result == "up_to_date" else result
-        except Exception as e:
-            return False, f"Ошибка автоматического обновления: {str(e)}"
+            return False, f"Ошибка восстановления: {e}"
 
     def download_and_install_update(self, update_info):
-        """Скачать и установить обновление"""
+        """Управляет полным циклом: download -> install"""
         try:
-            print("🔄 Начинаем процесс обновления...")
-
-            # Скачиваем обновление
-            download_success, download_result = self.download_update(update_info['download_url'])
-            if not download_success:
-                return False, download_result
-
-            # Устанавливаем обновление
-            install_success, install_message = self.install_update(download_result)
-            return install_success, install_message
-
+            ok, result = self.download_update(update_info.get("download_url"))
+            if not ok:
+                return False, result
+            zip_path = result
+            return self.install_update(zip_path, update_info)
         except Exception as e:
-            return False, f"Ошибка установки обновления: {str(e)}"
+            return False, f"Ошибка обновления: {e}"
 
     def get_repository_info(self):
-        """Получить информацию о настройках репозитория"""
         return {
-            'configured': self.is_repository_configured(),
-            'owner': self.config.get('owner', ''),
-            'repo': self.config.get('repo', ''),
-            'branch': self.config.get('branch', 'main')
+            "configured": self.is_repository_configured(),
+            "owner": self.config.get("owner", ""),
+            "repo": self.config.get("repo", ""),
+            "branch": self.config.get("branch", "main")
         }
+
+# Пример использования:
+# if __name__ == "__main__":
+#     um = UpdateManager(exe_name="DocumentFiller.exe")
+#     ok, res = um.check_for_updates()
+#     if ok and res != "up_to_date":
+#         print("Есть обновление:", res["version"])
+#         ok2, msg = um.download_and_install_update(res)
+#         print(ok2, msg)
+#     else:
+#         print("Обновлений нет или ошибка:", res)
