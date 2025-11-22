@@ -87,21 +87,19 @@ class UpdateManager:
         try:
             # Проверяем настройки репозитория
             if not self.is_repository_configured():
-                return False, "Репозиторий не настроен. Заполните поля 'owner' и 'repo' в файле repo_config.json"
+                return False, "Репозиторий не настроен"
 
             owner = self.config.get('owner', '')
             repo = self.config.get('repo', '')
 
             if not owner or not repo:
-                return False, "Не настроены данные репозитория"
-
-            print(f"🔍 Проверка обновлений для {owner}/{repo}...")
+                return False, "Репозиторий не настроен"
 
             # URL для получения последнего релиза
             url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
 
             # Делаем запрос к GitHub API
-            headers = {}
+            headers = {'User-Agent': 'DocumentFiller/1.0'}
             token = self.config.get('token')
             if token:
                 headers['Authorization'] = f'token {token}'
@@ -111,33 +109,20 @@ class UpdateManager:
             if response.status_code == 404:
                 return False, "Репозиторий или релизы не найдены"
             elif response.status_code == 403:
-                return False, "Превышен лимит запросов к GitHub API"
+                return False, "Превышен лимит запросов"
             elif response.status_code != 200:
                 return False, f"Ошибка GitHub API: {response.status_code}"
 
             release_data = response.json()
             latest_version = release_data['tag_name']
-            download_url = None
-
-            # Ищем asset для скачивания
-            assets = release_data.get('assets', [])
-            if assets:
-                download_url = assets[0]['browser_download_url']
-            else:
-                # Если нет assets, используем архив исходного кода
-                download_url = release_data['zipball_url']
-
-            print(f"📋 Текущая версия: {self.current_version}")
-            print(f"📋 Последняя версия: {latest_version}")
 
             # Сравниваем версии
             if self.is_newer_version(latest_version, self.current_version):
                 update_info = {
                     'version': latest_version,
-                    'download_url': download_url,
+                    'download_url': release_data.get('zipball_url'),
                     'release_notes': release_data.get('body', ''),
-                    'published_at': release_data.get('published_at', ''),
-                    'assets': assets
+                    'published_at': release_data.get('published_at', '')
                 }
                 return True, update_info
             else:

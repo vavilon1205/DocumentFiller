@@ -109,13 +109,265 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(5000, self.check_for_updates_on_startup)
 
     def check_for_updates(self):
-        """Проверка и установка обновлений"""
+        """Проверить обновления - полностью переписанная версия"""
         try:
-            return self.update_manager.auto_update_from_repo()  # ИСПРАВЛЕНО: изменено имя метода
-        except Exception as e:
-            print(f"Ошибка при проверке обновлений: {e}")
-            return False
+            # Проверяем, настроен ли репозиторий
+            repo_info = self.update_manager.get_repository_info()
+            if not repo_info['configured']:
+                QMessageBox.information(
+                    self,
+                    "Обновления не настроены",
+                    "Функция проверки обновлений не настроена.\n\n"
+                    "Для настройки необходимо указать данные репозитория в файле конфигурации.",
+                    QMessageBox.Ok
+                )
+                return
 
+            # Создаем диалог проверки
+            checking_dialog = QMessageBox(self)
+            checking_dialog.setWindowTitle("Проверка обновлений")
+            checking_dialog.setText("Выполняется проверка обновлений...")
+            checking_dialog.setStandardButtons(QMessageBox.NoButton)
+            checking_dialog.show()
+
+            # Запускаем проверку в отдельном потоке чтобы не блокировать UI
+            from PyQt5.QtCore import QThread, pyqtSignal
+
+            class UpdateCheckThread(QThread):
+                finished = pyqtSignal(object, object)
+
+                def __init__(self, update_manager):
+                    super().__init__()
+                    self.update_manager = update_manager
+
+                def run(self):
+                    success, result = self.update_manager.check_for_updates()
+                    self.finished.emit(success, result)
+
+            self.update_thread = UpdateCheckThread(self.update_manager)
+            self.update_thread.finished.connect(
+                lambda success, result: self.on_update_check_finished(success, result, checking_dialog)
+            )
+            self.update_thread.start()
+
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка",
+                                 f"Ошибка при проверке обновлений:\n{str(e)}")
+
+    def on_update_check_finished(self, success, result, checking_dialog):
+        """Обработчик завершения проверки обновлений"""
+        checking_dialog.close()
+
+        try:
+            if not success:
+                # Обработка ошибок
+                error_message = self.get_user_friendly_error(result)
+                QMessageBox.warning(self, "Проверка обновлений", error_message)
+                return
+
+            if result == "up_to_date":
+                QMessageBox.information(self, "Проверка обновлений",
+                                        "✅ Установлена последняя версия программы.")
+                return
+
+            # Обработка доступного обновления - ВАЖНО: result теперь словарь с информацией
+            self.show_update_available_message(result)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка",
+                                 f"Ошибка при обработке результата проверки:\n{str(e)}")
+
+    def get_user_friendly_error(self, technical_error):
+        """Преобразовать техническую ошибку в понятное сообщение"""
+        error_mapping = {
+            "Репозиторий не настроен": "Функция обновлений не настроена.",
+            "Репозиторий или релизы не найдены": "Обновления не найдены.",
+            "Превышен лимит запросов": "Сервис временно недоступен.",
+            "Таймаут при проверке обновлений": "Не удалось подключиться к серверу.",
+            "Ошибка подключения к интернету": "Отсутствует интернет-соединение.",
+            "Ошибка GitHub API": "Ошибка сервера обновлений.",
+            "Ошибка сервера": "Ошибка сервера обновлений."
+        }
+
+        # Ищем совпадение в сообщении об ошибке
+        for tech_error, user_error in error_mapping.items():
+            if tech_error in str(technical_error):
+                return user_error
+
+        # Если не нашли совпадение, возвращаем общее сообщение
+        return "Не удалось проверить обновления."
+
+    def show_update_available_message(self, update_info):
+        """Показать сообщение о доступном обновлении"""
+        try:
+            # Извлекаем только нужную информацию
+            version = update_info.get('version', 'Новая версия')
+
+            # Убираем префикс 'v' если есть
+            if version.startswith('v'):
+                version = version[1:]
+
+            # Форматируем описание
+            release_notes = update_info.get('release_notes', '').strip()
+            if not release_notes:
+                release_notes = "Описание изменений не предоставлено."
+            else:
+                # Ограничиваем длину описания
+                if len(release_notes) > 250:
+                    release_notes = release_notes[:250] + "..."
+
+            # Создаем чистое сообщение без технических деталей
+            message = f"Доступна новая версия программы: {version}\n\n"
+
+            if release_notes and release_notes != "Описание изменений не предоставлено.":
+                message += f"Что нового:\n{release_notes}\n\n"
+
+            message += "Хотите установить обновление?"
+
+            reply = QMessageBox.question(
+                self,
+                "Доступно обновление",
+                message,
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No  # По умолчанию "Нет"
+            )
+
+            if reply == QMessageBox.Yes:
+                self.install_update(update_info)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка",
+                                 f"Ошибка при отображении информации об обновлении:\n{str(e)}")
+
+    def install_update(self, update_info):
+        """Установить обновление"""
+        try:
+            # Извлекаем версию для сообщения
+            version = update_info.get('version', '')
+            if version.startswith('v'):
+                version = version[1:]
+
+            reply = QMessageBox.question(
+                self,
+                "Подтверждение установки",
+                f"Будет установлена версия {version}.\n\n"
+                "Перед установкой будет создана резервная копия.\n"
+                "Программа будет перезапущена после установки.\n\n"
+                "Продолжить?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No  # По умолчанию "Нет"
+            )
+
+            if reply != QMessageBox.Yes:
+                return
+
+            # Создаем диалог прогресса
+            progress_dialog = QMessageBox(self)
+            progress_dialog.setWindowTitle("Установка обновления")
+            progress_dialog.setText("Выполняется установка обновления...\nПожалуйста, подождите.")
+            progress_dialog.setStandardButtons(QMessageBox.NoButton)
+            progress_dialog.show()
+
+            # Запускаем установку в отдельном потоке
+            from PyQt5.QtCore import QThread, pyqtSignal
+
+            class UpdateInstallThread(QThread):
+                finished = pyqtSignal(object, object)
+
+                def __init__(self, update_manager, update_info):
+                    super().__init__()
+                    self.update_manager = update_manager
+                    self.update_info = update_info
+
+                def run(self):
+                    success, message = self.update_manager.download_and_install_update(self.update_info)
+                    self.finished.emit(success, message)
+
+            self.install_thread = UpdateInstallThread(self.update_manager, update_info)
+            self.install_thread.finished.connect(
+                lambda success, message: self.on_update_install_finished(success, message, progress_dialog)
+            )
+            self.install_thread.start()
+
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка",
+                                 f"Ошибка при установке обновления:\n{str(e)}")
+
+    def on_update_install_finished(self, success, message, progress_dialog):
+        """Обработчик завершения установки обновления"""
+        progress_dialog.close()
+
+        if success:
+            QMessageBox.information(
+                self,
+                "Обновление установлено",
+                "✅ Обновление успешно установлено!\n\n"
+                "Программа будет перезапущена для применения изменений."
+            )
+            # Даем время прочитать сообщение
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(2000, self.update_manager.restart_program)
+        else:
+            QMessageBox.critical(
+                self,
+                "Ошибка установки",
+                f"❌ Не удалось установить обновление:\n{message}"
+            )
+    def perform_update_check(self, checking_msg):
+        """Выполнить проверку обновлений - показываем только версию"""
+        try:
+            success, message = self.update_manager.check_for_updates()
+            checking_msg.close()
+
+            if success:
+                if message == "up_to_date":
+                    QMessageBox.information(self, "Проверка обновлений",
+                                            "✅ Установлена последняя версия программы.")
+                else:
+                    # Показываем только версию без технических деталей
+                    update_info = message
+                    version = update_info.get('version', '')
+
+                    # Очищаем версию от префикса 'v' если есть
+                    if version.startswith('v'):
+                        version = version[1:]
+
+                    # Форматируем описание изменений
+                    release_notes = update_info.get('release_notes', '').strip()
+                    if not release_notes:
+                        release_notes = "Описание изменений не предоставлено."
+                    else:
+                        # Обрезаем длинное описание
+                        if len(release_notes) > 300:
+                            release_notes = release_notes[:300] + "..."
+
+                    reply = QMessageBox.question(
+                        self,
+                        "Доступно обновление",
+                        f"Доступна новая версия программы: {version}\n\n"
+                        f"Описание изменений:\n{release_notes}\n\n"
+                        "Установить обновление?",
+                        QMessageBox.Yes | QMessageBox.No
+                    )
+                    if reply == QMessageBox.Yes:
+                        self.install_update(update_info)
+            else:
+                # Упрощенные сообщения об ошибках
+                error_messages = {
+                    "Репозиторий не настроен": "Функция обновлений не настроена.",
+                    "Репозиторий или релизы не найдены": "Обновления не найдены.",
+                    "Превышен лимит запросов": "Сервис временно недоступен.",
+                    "Таймаут при проверке обновлений": "Не удалось подключиться к серверу.",
+                    "Ошибка подключения к интернету": "Отсутствует интернет-соединение."
+                }
+
+                user_message = error_messages.get(message, "Не удалось проверить обновления.")
+                QMessageBox.warning(self, "Проверка обновлений", user_message)
+
+        except Exception as e:
+            checking_msg.close()
+            QMessageBox.critical(self, "Ошибка",
+                                 f"Ошибка при проверке обновлений:\n{str(e)}")
     def manual_update_from_git(self):
         """Ручное обновление через Git"""
         return self.update_manager.perform_git_update()
@@ -125,19 +377,37 @@ class MainWindow(QMainWindow):
         return self.update_manager.perform_zip_update(zip_url)
 
     def check_for_updates_on_startup(self):
-        """Проверить обновления при запуске"""
+        """Проверить обновления при запуске - тихая проверка"""
         if hasattr(self, 'update_manager'):
             # Задержка чтобы не мешать запуску
-            QTimer.singleShot(3000, self.silent_update_check)
+            QTimer.singleShot(5000, self.silent_update_check)
 
     def silent_update_check(self):
-        """Тихая проверка обновлений"""
+        """Тихая проверка обновлений без показа диалогов"""
         try:
             success, result = self.update_manager.check_for_updates()
             if success and result != "up_to_date":
-                self.show_update_notification(result)
+                # Показываем ненавязчивое уведомление
+                update_info = result
+                version = update_info.get('version', '')
+                if version.startswith('v'):
+                    version = version[1:]
+
+                # Создаем кастомное сообщение
+                from PyQt5.QtWidgets import QMessageBox
+                msg = QMessageBox(self)
+                msg.setWindowTitle("Доступно обновление")
+                msg.setText(f"Доступна новая версия: {version}")
+                msg.setInformativeText("Хотите установить обновление сейчас?")
+                msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+                msg.setDefaultButton(QMessageBox.No)
+
+                reply = msg.exec_()
+                if reply == QMessageBox.Yes:
+                    self.install_update(update_info)
         except Exception as e:
-            print(f"Ошибка при проверке обновлений: {e}")
+            # Игнорируем ошибки при тихой проверке
+            print(f"Тихая проверка обновлений: {e}")
 
     def show_update_notification(self, update_info):
         """Показать уведомление о обновлении"""
@@ -152,17 +422,68 @@ class MainWindow(QMainWindow):
             self.install_update(update_info)
 
     def install_update(self, update_info):
-        """Установить обновление"""
+        """Установить обновление - улучшенная версия"""
         try:
-            success, message = self.update_manager.auto_update_from_repo()
+            # Показываем только версию в сообщении
+            version = update_info.get('version', '')
+            if version.startswith('v'):
+                version = version[1:]
+
+            reply = QMessageBox.question(
+                self,
+                "Подтверждение установки",
+                f"Будет установлена версия {version}.\n\n"
+                "Перед установкой будет создана резервная копия.\n"
+                "Программа будет перезапущена после установки.\n\n"
+                "Продолжить?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+
+            if reply != QMessageBox.Yes:
+                return
+
+            # Создаем диалог прогресса
+            progress_dialog = QMessageBox(self)
+            progress_dialog.setWindowTitle("Установка обновления")
+            progress_dialog.setText("Выполняется установка обновления...\nПожалуйста, подождите.")
+            progress_dialog.setStandardButtons(QMessageBox.NoButton)
+            progress_dialog.show()
+
+            # Даем время отобразиться диалогу
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(100, lambda: self.perform_update_installation(update_info, progress_dialog))
+
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка",
+                                 f"Ошибка при установке обновления:\n{str(e)}")
+
+    def perform_update_installation(self, update_info, progress_dialog):
+        """Выполнить установку обновления"""
+        try:
+            success, message = self.update_manager.download_and_install_update(update_info)
+            progress_dialog.close()
+
             if success:
-                QMessageBox.information(self, "Обновление",
-                                        "Обновление успешно установлено. Программа будет перезапущена.")
+                QMessageBox.information(
+                    self,
+                    "Обновление установлено",
+                    "✅ Обновление успешно установлено!\n\n"
+                    "Программа будет перезапущена для применения изменений."
+                )
                 self.update_manager.restart_program()
             else:
-                QMessageBox.warning(self, "Ошибка обновления", message)
+                QMessageBox.critical(
+                    self,
+                    "Ошибка установки",
+                    f"❌ Не удалось установить обновление:\n{message}"
+                )
         except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Ошибка при установке обновления: {str(e)}")
+            progress_dialog.close()
+            QMessageBox.critical(
+                self,
+                "Ошибка",
+                f"❌ Ошибка при установке обновления:\n{str(e)}"
+            )
 
     def get_script_dir(self):
         """Получить директорию скрипта"""
@@ -1462,7 +1783,22 @@ class MainWindow(QMainWindow):
     def show_about(self):
         """Показать информацию о программе"""
         try:
-            version = self.update_manager.config['current_version'] if hasattr(self, 'update_manager') else "1.0.0"
+            # Безопасное получение версии
+            version = "1.0.0"
+            if hasattr(self, 'update_manager'):
+                try:
+                    version = self.update_manager.current_version
+                except Exception:
+                    # Если не удалось получить версию из update_manager, пробуем из конфига
+                    try:
+                        version_path = os.path.join(self.get_script_dir(), 'version_config.json')
+                        if os.path.exists(version_path):
+                            with open(version_path, 'r', encoding='utf-8') as f:
+                                version_data = json.load(f)
+                                version = version_data.get('current_version', '1.0.0')
+                    except:
+                        pass
+
             QMessageBox.about(
                 self,
                 "О программе",
