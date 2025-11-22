@@ -1,0 +1,12 @@
+{
+  "activated": true,
+  "license_key": "TRIAL_VERSION",
+  "activation_date": "2025-11-19T21:10:18.791142",
+  "expiration_date": "2025-11-26T23:59:59",
+  "type": "trial",
+  "features": [
+    "basic"
+  ],
+  "hardware_id": "3DE086A4",
+  "is_trial": true
+}
