@@ -213,9 +213,21 @@ class UpdateManager:
 
             update_files_dir = os.path.join(extract_dir, extracted_folders[0])
 
+            # ВАЖНОЕ ИСПРАВЛЕНИЕ: Проверяем структуру папок
+            # Иногда в архиве может быть дополнительная вложенность
+            while True:
+                sub_folders = [f for f in os.listdir(update_files_dir)
+                               if os.path.isdir(os.path.join(update_files_dir, f))]
+                # Если есть только одна папка и это не очевидная папка проекта, заходим глубже
+                if len(sub_folders) == 1 and not any(
+                        name in sub_folders[0].lower() for name in ['src', 'main', 'documentfiller']):
+                    update_files_dir = os.path.join(update_files_dir, sub_folders[0])
+                else:
+                    break
+
             print(f"🔄 Копирование файлов из: {update_files_dir}")
 
-            # Копируем файлы обновления
+            # Копируем файлы обновления с сохранением пользовательских данных
             self.copy_update_files(update_files_dir, self.script_dir)
 
             # Обновляем версию в конфиге
@@ -248,30 +260,68 @@ class UpdateManager:
             'settings.ini',
             'repo_config.json',  # Сохраняем настройки репозитория
             'version_config.json',  # Обновим отдельно
-            'update.log'
+            'update.log',
+            '__pycache__',
+            '.git',
+            'Шаблоны'  # Сохраняем пользовательские шаблоны
         ]
 
         for item in os.listdir(source_dir):
             if item in exclude:
+                print(f"⏩ Пропуск: {item}")
                 continue
 
             source_path = os.path.join(source_dir, item)
             target_path = os.path.join(target_dir, item)
 
-            if os.path.isdir(source_path):
-                if os.path.exists(target_path):
-                    shutil.rmtree(target_path)
-                shutil.copytree(source_path, target_path)
-            else:
-                if os.path.exists(target_path):
-                    os.remove(target_path)
-                shutil.copy2(source_path, target_path)
+            try:
+                if os.path.isdir(source_path):
+                    if os.path.exists(target_path):
+                        # Для папок: копируем содержимое, но не перезаписываем существующие пользовательские файлы
+                        for sub_item in os.listdir(source_path):
+                            sub_source = os.path.join(source_path, sub_item)
+                            sub_target = os.path.join(target_path, sub_item)
+
+                            if os.path.exists(sub_target):
+                                if os.path.isdir(sub_target):
+                                    shutil.rmtree(sub_target)
+                                else:
+                                    os.remove(sub_target)
+
+                            if os.path.isdir(sub_source):
+                                shutil.copytree(sub_source, sub_target)
+                            else:
+                                shutil.copy2(sub_source, sub_target)
+                    else:
+                        shutil.copytree(source_path, target_path)
+                else:
+                    if os.path.exists(target_path):
+                        os.remove(target_path)
+                    shutil.copy2(source_path, target_path)
+
+                print(f"✅ Скопирован: {item}")
+
+            except Exception as e:
+                print(f"❌ Ошибка копирования {item}: {e}")
 
     def update_version_config(self):
         """Обновить версию в конфиге после успешного обновления"""
         try:
-            # Версия будет обновлена после перезапуска и проверки нового релиза
-            print("ℹ️ Версия будет обновлена после перезапуска")
+            # После успешного обновления обновляем версию
+            version_path = os.path.join(self.script_dir, 'version_config.json')
+            if os.path.exists(version_path):
+                with open(version_path, 'r', encoding='utf-8') as f:
+                    version_data = json.load(f)
+
+                # Получаем актуальную версию из релиза
+                success, result = self.check_for_updates()
+                if success and result != "up_to_date":
+                    version_data['current_version'] = result['version'].lstrip('vV')
+
+                    with open(version_path, 'w', encoding='utf-8') as f:
+                        json.dump(version_data, f, indent=2, ensure_ascii=False)
+
+                    print(f"✅ Версия обновлена до: {version_data['current_version']}")
         except Exception as e:
             print(f"⚠️ Ошибка обновления версии: {e}")
 
@@ -287,18 +337,25 @@ class UpdateManager:
             # Копируем важные файлы
             important_files = [
                 'main.py', 'main_window.py', 'settings.py',
-                'theme_manager.py', 'widgets.py', 'update_manager.py',
+                'theme_manager.py', 'widgets.py', 'update_manager.py', 'license_manager.py',
                 'version_config.json', 'repo_config.json',
                 'анкеты_данные.xlsx', 'license.json'
             ]
 
+            # Также копируем исполняемый файл если есть
+            if getattr(sys, 'frozen', False):
+                important_files.append(os.path.basename(sys.executable))
+
             os.makedirs(backup_path, exist_ok=True)
+
+            copied_count = 0
             for file in important_files:
                 src = os.path.join(self.script_dir, file)
                 if os.path.exists(src):
                     shutil.copy2(src, backup_path)
+                    copied_count += 1
 
-            print(f"📂 Резервная копия создана: {backup_path}")
+            print(f"📂 Резервная копия создана: {backup_path} ({copied_count} файлов)")
             return True
 
         except Exception as e:
@@ -310,44 +367,60 @@ class UpdateManager:
         try:
             backup_dir = os.path.join(self.script_dir, 'backups')
             if not os.path.exists(backup_dir):
-                return False
+                return False, "Папка backups не найдена"
 
             # Находим последнюю резервную копию
             backups = [d for d in os.listdir(backup_dir) if d.startswith('backup_')]
             if not backups:
-                return False
+                return False, "Резервные копии не найдены"
 
             latest_backup = sorted(backups)[-1]
             backup_path = os.path.join(backup_dir, latest_backup)
 
             # Восстанавливаем файлы
+            restored_count = 0
             for file in os.listdir(backup_path):
                 src = os.path.join(backup_path, file)
                 dst = os.path.join(self.script_dir, file)
-                if os.path.exists(dst):
-                    os.remove(dst)
-                shutil.copy2(src, dst)
 
-            print(f"🔄 Восстановлено из резервной копии: {latest_backup}")
-            return True
+                try:
+                    if os.path.exists(dst):
+                        if os.path.isdir(dst):
+                            shutil.rmtree(dst)
+                        else:
+                            os.remove(dst)
+
+                    shutil.copy2(src, dst)
+                    restored_count += 1
+                    print(f"✅ Восстановлен: {file}")
+
+                except Exception as e:
+                    print(f"❌ Ошибка восстановления {file}: {e}")
+
+            print(f"🔄 Восстановлено из резервной копии: {latest_backup} ({restored_count} файлов)")
+            return True, f"Восстановлено {restored_count} файлов"
 
         except Exception as e:
             print(f"❌ Ошибка восстановления из резервной копии: {e}")
-            return False
+            return False, f"Ошибка восстановления: {str(e)}"
 
     def restart_program(self):
         """Перезапустить программу"""
         try:
             import subprocess
-            python = sys.executable
+            import time
+
+            # Даем время для закрытия основного процесса
+            time.sleep(2)
+
             if getattr(sys, 'frozen', False):
                 # Если это собранное приложение
                 executable = sys.executable
-                subprocess.Popen([executable])
+                subprocess.Popen([executable], cwd=self.script_dir)
             else:
                 # Если это скрипт Python
                 script = os.path.join(self.script_dir, 'main.py')
-                subprocess.Popen([python, script])
+                subprocess.Popen([sys.executable, script], cwd=self.script_dir)
 
             sys.exit(0)
         except Exception as e:
@@ -367,6 +440,8 @@ class UpdateManager:
     def download_and_install_update(self, update_info):
         """Скачать и установить обновление"""
         try:
+            print("🔄 Начинаем процесс обновления...")
+
             # Скачиваем обновление
             download_success, download_result = self.download_update(update_info['download_url'])
             if not download_success:
