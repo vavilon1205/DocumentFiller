@@ -16,7 +16,7 @@ import openpyxl
 from docxtpl import DocxTemplate
 
 from widgets import ValidatedLineEdit, EditRecordDialog, RecordsTable
-from update_manager import UpdateManager
+from update_manager import UpdateManager  # ИСПРАВЛЕНО: изменено с updater на update_manager
 from license_manager import LicenseManager
 
 
@@ -42,7 +42,7 @@ class DocumentWorker(QThread):
             os.makedirs(folder_path, exist_ok=True)
 
             # Путь к шаблонам
-            templates_dir = os.path.join(self.application_path, 'Шаблоны')
+            templates_dir = self.application_path
 
             # Проверяем, есть ли шаблоны
             template_files = [f for f in os.listdir(templates_dir) if f.endswith('.docx')]
@@ -106,98 +106,24 @@ class MainWindow(QMainWindow):
         # АВТОМАТИЧЕСКАЯ ПРОВЕРКА ЛИЦЕНЗИИ ПРИ ЗАПУСКЕ
         self.check_license_on_startup()
         # После инициализации UI
-        # QTimer.singleShot(5000, self.check_for_updates_on_startup)
+        QTimer.singleShot(5000, self.check_for_updates_on_startup)
 
     def check_for_updates(self):
-        """Проверить обновления через GitHub API"""
+        """Проверка и установка обновлений"""
         try:
-            QMessageBox.information(self, "Проверка обновлений",
-                                    "Проверяем наличие обновлений...")
-
-            success, result = self.update_manager.check_for_updates()
-
-            if success:
-                if result == "up_to_date":
-                    QMessageBox.information(self, "Обновления",
-                                            "✅ У вас установлена последняя версия программы.")
-                else:
-                    # result содержит информацию об обновлении
-                    version = result.get('version', 'новая версия')
-                    release_notes = result.get('release_notes', '')
-
-                    message = f"Доступна новая версия: {version}\n\n"
-                    if release_notes:
-                        message += f"Что нового:\n{release_notes}\n\n"
-                    message += "Установить обновление сейчас?"
-
-                    reply = QMessageBox.question(
-                        self,
-                        "Доступно обновление",
-                        message,
-                        QMessageBox.Yes | QMessageBox.No
-                    )
-
-                    if reply == QMessageBox.Yes:
-                        self.install_update(result)
-            else:
-                QMessageBox.warning(self, "Обновления",
-                                    f"⚠️ Не удалось проверить обновления:\n{result}")
-
+            return self.update_manager.auto_update_from_repo()  # ИСПРАВЛЕНО: изменено имя метода
         except Exception as e:
-            QMessageBox.critical(self, "Ошибка",
-                                 f"❌ Ошибка при проверке обновлений:\n{str(e)}")
+            print(f"Ошибка при проверке обновлений: {e}")
+            return False
 
-    def install_update(self, update_info):
-        """Установить обновление"""
-        try:
-            QMessageBox.information(self, "Обновление",
-                                    "Начинается установка обновления...")
-
-            success, message = self.update_manager.download_and_install_update(update_info)
-
-            if success:
-                QMessageBox.information(self, "Обновление",
-                                        f"✅ {message}\n\nПрограмма будет перезапущена.")
-                self.update_manager.restart_program()
-            else:
-                QMessageBox.critical(self, "Ошибка обновления",
-                                     f"❌ {message}")
-
-        except Exception as e:
-            QMessageBox.critical(self, "Ошибка",
-                                 f"❌ Ошибка при установке обновления:\n{str(e)}")
-
-    def manual_update(self):
-        """Ручное обновление через ZIP файл"""
-        try:
-            zip_file, _ = QFileDialog.getOpenFileName(
-                self,
-                "Выберите файл обновления (.zip)",
-                "",
-                "ZIP files (*.zip);;All files (*.*)"
-            )
-
-            if zip_file:
-                reply = QMessageBox.question(
-                    self,
-                    "Подтверждение",
-                    "Установить выбранное обновление? Перед установкой будет создана резервная копия.",
-                    QMessageBox.Yes | QMessageBox.No
-                )
-                if reply == QMessageBox.Yes:
-                    success, message = self.update_manager.install_update(zip_file)
-                    if success:
-                        QMessageBox.information(self, "Обновление",
-                                                "Обновление успешно установлено. Программа будет перезапущена.")
-                        self.update_manager.restart_program()
-                    else:
-                        QMessageBox.critical(self, "Ошибка обновления", message)
-        except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Ошибка при ручном обновлении: {str(e)}")
+    def manual_update_from_git(self):
+        """Ручное обновление через Git"""
+        return self.update_manager.perform_git_update()
 
     def manual_update_from_zip(self, zip_url):
         """Ручное обновление через ZIP"""
         return self.update_manager.perform_zip_update(zip_url)
+
     def check_for_updates_on_startup(self):
         """Проверить обновления при запуске"""
         if hasattr(self, 'update_manager'):
@@ -237,6 +163,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Ошибка обновления", message)
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Ошибка при установке обновления: {str(e)}")
+
     def get_script_dir(self):
         """Получить директорию скрипта"""
         if getattr(sys, 'frozen', False):
