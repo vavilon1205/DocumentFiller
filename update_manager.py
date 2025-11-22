@@ -1,4 +1,4 @@
-# update_manager.py - ВЕРСИЯ С ПРАВИЛЬНОЙ СБОРКОЙ EXE И ВКЛЮЧЕНИЕМ DLL
+# update_manager.py - ВЕРСИЯ БЕЗ СБОРКИ EXE НА СТОРОНЕ КЛИЕНТА
 import os
 import sys
 import json
@@ -34,8 +34,8 @@ class UpdateManager:
             if not os.path.exists(config_path):
                 default_config = {
                     "type": "github",
-                    "owner": "",
-                    "repo": "",
+                    "owner": "vavilon1205",
+                    "repo": "DocumentFiller",
                     "branch": "main",
                     "token": "",
                     "update_channel": "stable"
@@ -76,7 +76,7 @@ class UpdateManager:
         return bool(self.config.get("owner") and self.config.get("repo"))
 
     def check_for_updates(self):
-        """Проверяет обновления"""
+        """Проверяет обновления - ИЩЕТ EXE В ASSETS"""
         try:
             if not self.is_repository_configured():
                 return False, "Репозиторий не настроен"
@@ -100,19 +100,44 @@ class UpdateManager:
                 return False, "Не удалось определить версию в релизе"
 
             latest = latest_tag.lstrip("vV")
-            if self.is_newer_version(latest, self.current_version):
-                # Используем zipball_url для скачивания исходников
-                download_url = rd.get("zipball_url")
 
-                info = {
-                    "version": latest,
-                    "download_url": download_url,
-                    "release_notes": rd.get("body", ""),
-                    "published_at": rd.get("published_at", "")
-                }
-                return True, info
-            else:
+            # Проверяем, есть ли новая версия
+            if not self.is_newer_version(latest, self.current_version):
                 return True, "up_to_date"
+
+            # Ищем EXE файл в assets
+            assets = rd.get("assets", [])
+            exe_asset = None
+            zip_asset = None
+
+            for asset in assets:
+                name = asset.get("name", "").lower()
+                if name == "documentfiller.exe":
+                    exe_asset = asset
+                elif name == "documentfiller.zip":
+                    zip_asset = asset
+
+            # Предпочитаем EXE, но если нет - используем ZIP
+            download_url = None
+            if exe_asset:
+                download_url = exe_asset.get("browser_download_url")
+                asset_type = "exe"
+            elif zip_asset:
+                download_url = zip_asset.get("browser_download_url")
+                asset_type = "zip"
+            else:
+                # Если нет готовых билдов, используем исходники (но это запасной вариант)
+                download_url = rd.get("zipball_url")
+                asset_type = "source"
+
+            info = {
+                "version": latest,
+                "download_url": download_url,
+                "asset_type": asset_type,
+                "release_notes": rd.get("body", ""),
+                "published_at": rd.get("published_at", "")
+            }
+            return True, info
 
         except Exception as e:
             return False, f"Ошибка при проверке обновлений: {e}"
@@ -143,7 +168,16 @@ class UpdateManager:
                 return False, "URL для скачивания не указан"
 
             tmp = tempfile.mkdtemp()
-            zip_path = os.path.join(tmp, f"update_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip")
+
+            # Определяем расширение файла из URL
+            if download_url.endswith('.exe'):
+                file_ext = '.exe'
+            elif download_url.endswith('.zip'):
+                file_ext = '.zip'
+            else:
+                file_ext = '.zip'  # по умолчанию
+
+            zip_path = os.path.join(tmp, f"update_{datetime.now().strftime('%Y%m%d_%H%M%S')}{file_ext}")
 
             headers = {"User-Agent": "DocumentFiller-Updater/1.0"}
             token = self.config.get("token", "").strip()
@@ -162,15 +196,91 @@ class UpdateManager:
         except Exception as e:
             return False, f"Ошибка скачивания: {e}"
 
-    def install_update(self, zip_path, update_info):
-        """Установить обновление - УЛУЧШЕННАЯ СБОРКА EXE"""
+    def install_update(self, update_path, update_info):
+        """Установить обновление - ТОЛЬКО ГОТОВЫЕ БИЛДЫ"""
         try:
-            print(f"Начало установки обновления из: {zip_path}")
+            print(f"Начало установки обновления из: {update_path}")
 
             # Создаем резервную копию
             backup_made = self.create_backup()
             if not backup_made:
                 print("Предупреждение: не удалось создать резервную копию")
+
+            asset_type = update_info.get("asset_type", "zip")
+
+            if asset_type == "exe":
+                return self.install_exe_update(update_path, update_info)
+            elif asset_type == "zip":
+                return self.install_zip_update(update_path, update_info)
+            else:
+                return False, "Тип обновления не поддерживается. Нужен EXE или ZIP файл."
+
+        except Exception as e:
+            error_msg = f"Ошибка установки обновления: {e}"
+            print(error_msg)
+            if backup_made:
+                self.restore_backup()
+            return False, error_msg
+
+    def install_exe_update(self, exe_path, update_info):
+        """Установка через EXE файл"""
+        try:
+            print("Установка через EXE файл...")
+
+            # Создаем bat файл для установки
+            bat_content = f'''@echo off
+chcp 65001 >nul
+title Обновление DocumentFiller
+echo =======================================
+echo    Установка обновления DocumentFiller
+echo =======================================
+echo.
+
+echo [1/5] Ожидание завершения текущей программы...
+timeout /t 3 /nobreak >nul
+
+echo [2/5] Завершение процесса {self.exe_name}...
+taskkill /f /im "{self.exe_name}" >nul 2>&1
+
+echo [3/5] Ожидание освобождения файлов...
+timeout /t 2 /nobreak >nul
+
+echo [4/5] Замена EXE файла...
+copy /Y "{exe_path}" "{os.path.join(self.script_dir, self.exe_name)}" >nul
+
+echo [5/5] Запуск обновленной программы...
+cd /d "{self.script_dir}"
+start "" "{os.path.join(self.script_dir, self.exe_name)}"
+
+echo Обновление успешно завершено!
+timeout /t 2 >nul
+
+REM Очистка
+del /q "{exe_path}" >nul 2>&1
+del /q "%~f0" >nul 2>&1
+'''
+
+            bat_path = os.path.join(self.script_dir, "update_exe.bat")
+            with open(bat_path, "w", encoding="utf-8") as f:
+                f.write(bat_content)
+
+            # Обновляем версию в конфиге
+            if update_info and update_info.get("version"):
+                self._write_version(update_info["version"])
+
+            print("Запуск BAT файла для применения обновления...")
+            subprocess.Popen([bat_path], cwd=self.script_dir, shell=True)
+            sys.exit(0)
+
+            return True, "Запущена установка EXE обновления"
+
+        except Exception as e:
+            return False, f"Ошибка установки через EXE: {e}"
+
+    def install_zip_update(self, zip_path, update_info):
+        """Установка через ZIP архив с готовым билдом"""
+        try:
+            print("Установка через ZIP архив с готовым билдом...")
 
             # Распаковываем архив
             extract_dir = tempfile.mkdtemp()
@@ -178,25 +288,21 @@ class UpdateManager:
             with zipfile.ZipFile(zip_path, "r") as z:
                 z.extractall(extract_dir)
 
-            # Находим корневую папку с обновлением
-            entries = [p for p in os.listdir(extract_dir)
-                       if os.path.isdir(os.path.join(extract_dir, p))]
+            # Ищем EXE файл в распакованных файлах
+            exe_files = []
+            for root, dirs, files in os.walk(extract_dir):
+                for file in files:
+                    if file.lower() == self.exe_name.lower():
+                        exe_files.append(os.path.join(root, file))
 
-            if not entries:
-                return False, "Архив обновления не содержит файлов"
+            if not exe_files:
+                return False, "EXE файл не найден в архиве"
 
-            update_root = os.path.join(extract_dir, entries[0])
-            print(f"Корень обновления: {update_root}")
+            exe_path = exe_files[0]
+            print(f"Найден EXE файл: {exe_path}")
 
-            # Собираем EXE из исходников
-            print("Сборка нового EXE из исходников...")
-            build_success, build_message = self.build_exe_from_source(update_root)
-
-            if not build_success:
-                return False, f"Ошибка сборки EXE: {build_message}"
-
-            # Создаем bat файл для применения обновления
-            bat_content = f"""@echo off
+            # Создаем bat файл для установки
+            bat_content = f'''@echo off
 chcp 65001 >nul
 title Обновление DocumentFiller
 echo =======================================
@@ -214,21 +320,12 @@ echo [3/6] Ожидание освобождения файлов...
 timeout /t 2 /nobreak >nul
 
 echo [4/6] Копирование обновленных файлов...
-REM Создаем временную папку для нового EXE
-mkdir "%TEMP%\\docfiller_update" >nul 2>&1
-
-REM Копируем все файлы из обновления, кроме пользовательских данных
-xcopy "{update_root}\\*" "{self.script_dir}\\" /Y /E /H /I /EXCLUDE:exclude_list.txt >nul 2>&1
-
-REM Копируем собранный EXE и всю папку dist
-if exist "{os.path.join(update_root, 'dist', 'DocumentFiller')}" (
-    xcopy "{os.path.join(update_root, 'dist', 'DocumentFiller')}\\*" "{self.script_dir}\\" /Y /E /H /I >nul 2>&1
-)
+REM Копируем все файлы из архива
+xcopy "{extract_dir}\\*" "{self.script_dir}\\" /Y /E /H /I >nul 2>&1
 
 echo [5/6] Очистка временных файлов...
 rmdir /s /q "{extract_dir}" >nul 2>&1
 del /q "{zip_path}" >nul 2>&1
-rmdir /s /q "%TEMP%\\docfiller_update" >nul 2>&1
 
 echo [6/6] Запуск обновленной программы...
 cd /d "{self.script_dir}"
@@ -237,20 +334,9 @@ start "" "{os.path.join(self.script_dir, self.exe_name)}"
 echo Обновление успешно завершено!
 timeout /t 2 >nul
 del /q "%~f0" >nul 2>&1
-"""
+'''
 
-            # Создаем файл исключений для пользовательских данных
-            exclude_content = """анкеты_данные.xlsx
-license.json
-backups\\
-__update_tmp\\
-"""
-
-            exclude_path = os.path.join(self.script_dir, "exclude_list.txt")
-            with open(exclude_path, "w", encoding="utf-8") as f:
-                f.write(exclude_content)
-
-            bat_path = os.path.join(self.script_dir, "apply_update.bat")
+            bat_path = os.path.join(self.script_dir, "update_zip.bat")
             with open(bat_path, "w", encoding="utf-8") as f:
                 f.write(bat_content)
 
@@ -259,250 +345,13 @@ __update_tmp\\
                 self._write_version(update_info["version"])
 
             print("Запуск BAT файла для применения обновления...")
-            # Запускаем bat файл
             subprocess.Popen([bat_path], cwd=self.script_dir, shell=True)
-
-            # Завершаем текущее приложение
             sys.exit(0)
 
-            return True, "Запущена установка обновления"
+            return True, "Запущена установка ZIP обновления"
 
         except Exception as e:
-            error_msg = f"Ошибка установки обновления: {e}"
-            print(error_msg)
-            # Пытаемся восстановить из резервной копии
-            if backup_made:
-                self.restore_backup()
-            return False, error_msg
-
-    def build_exe_from_source(self, source_dir):
-        """Собрать EXE из исходников - УЛУЧШЕННАЯ ВЕРСИЯ"""
-        try:
-            print("Начало сборки EXE из исходников...")
-
-            # Проверяем наличие необходимых файлов
-            required_files = ['main.py', 'main_window.py', 'settings.py', 'theme_manager.py']
-            missing_files = []
-            for file in required_files:
-                if not os.path.exists(os.path.join(source_dir, file)):
-                    missing_files.append(file)
-
-            if missing_files:
-                return False, f"Отсутствуют необходимые файлы: {missing_files}"
-
-            # Создаем улучшенный spec файл для сборки
-            spec_content = self.create_enhanced_spec_file()
-            spec_path = os.path.join(source_dir, 'document_filler.spec')
-            with open(spec_path, 'w', encoding='utf-8') as f:
-                f.write(spec_content)
-
-            # Устанавливаем PyInstaller если не установлен
-            self.ensure_pyinstaller()
-
-            # Собираем EXE с помощью PyInstaller
-            print("Запуск PyInstaller...")
-            build_cmd = [
-                'pyinstaller',
-                'document_filler.spec',
-                '--clean',
-                '--noconfirm'
-            ]
-
-            # Если запущены из EXE, используем системный Python
-            if getattr(sys, "frozen", False):
-                python_exe = self.find_python_exe()
-                if python_exe:
-                    build_cmd = [python_exe, '-m', 'PyInstaller'] + build_cmd[1:]
-
-            result = subprocess.run(
-                build_cmd,
-                cwd=source_dir,
-                capture_output=True,
-                text=True,
-                timeout=600  # 10 минут таймаут
-            )
-
-            if result.returncode != 0:
-                error_msg = f"Ошибка сборки: {result.stderr}"
-                print(f"STDOUT: {result.stdout}")
-                print(f"STDERR: {result.stderr}")
-                return False, error_msg
-
-            # Проверяем, что EXE создан
-            exe_path = os.path.join(source_dir, 'dist', 'DocumentFiller', self.exe_name)
-            if not os.path.exists(exe_path):
-                return False, "EXE файл не создан после сборки"
-
-            print(f"EXE успешно собран: {exe_path}")
-
-            # Проверяем наличие DLL файлов
-            dist_dir = os.path.join(source_dir, 'dist', 'DocumentFiller')
-            dll_files = [f for f in os.listdir(dist_dir) if f.endswith('.dll')]
-            print(f"Найдено DLL файлов в дистрибутиве: {len(dll_files)}")
-
-            for dll in dll_files:
-                print(f"  - {dll}")
-
-            return True, "Сборка завершена успешно"
-
-        except subprocess.TimeoutExpired:
-            return False, "Таймаут при сборке EXE (более 10 минут)"
-        except Exception as e:
-            return False, f"Ошибка при сборке EXE: {e}"
-
-    def ensure_pyinstaller(self):
-        """Убедиться, что PyInstaller установлен"""
-        try:
-            import PyInstaller
-            print("PyInstaller уже установлен")
-            return True
-        except ImportError:
-            print("Установка PyInstaller...")
-            try:
-                subprocess.run([sys.executable, '-m', 'pip', 'install', 'pyinstaller'],
-                               check=True, capture_output=True)
-                print("PyInstaller успешно установлен")
-                return True
-            except Exception as e:
-                print(f"Ошибка установки PyInstaller: {e}")
-                return False
-
-    def find_python_exe(self):
-        """Найти Python в системе"""
-        try:
-            # Пробуем разные варианты
-            possible_paths = [
-                "python",
-                "python3",
-                "py",
-                r"C:\Python39\python.exe",
-                r"C:\Python310\python.exe",
-                r"C:\Python311\python.exe",
-                r"C:\Python312\python.exe",
-                r"C:\Python313\python.exe",
-                r"C:\Program Files\Python39\python.exe",
-                r"C:\Program Files\Python310\python.exe",
-                r"C:\Program Files\Python311\python.exe",
-                r"C:\Program Files\Python312\python.exe",
-                r"C:\Program Files\Python313\python.exe",
-                r"C:\Users\{}\AppData\Local\Programs\Python\Python39\python.exe".format(os.getenv('USERNAME')),
-                r"C:\Users\{}\AppData\Local\Programs\Python\Python310\python.exe".format(os.getenv('USERNAME')),
-                r"C:\Users\{}\AppData\Local\Programs\Python\Python311\python.exe".format(os.getenv('USERNAME')),
-                r"C:\Users\{}\AppData\Local\Programs\Python\Python312\python.exe".format(os.getenv('USERNAME')),
-                r"C:\Users\{}\AppData\Local\Programs\Python\Python313\python.exe".format(os.getenv('USERNAME')),
-            ]
-
-            for path in possible_paths:
-                try:
-                    result = subprocess.run([path, "--version"], capture_output=True, timeout=5)
-                    if result.returncode == 0:
-                        print(f"Найден Python: {path}")
-                        return path
-                except:
-                    continue
-
-            print("Python не найден в системе")
-            return None
-        except Exception as e:
-            print(f"Ошибка поиска Python: {e}")
-            return None
-
-    def create_enhanced_spec_file(self):
-        """Создать улучшенный spec файл для сборки с включением всех DLL"""
-        return '''# -*- mode: python ; coding: utf-8 -*-
-
-import sys
-from PyInstaller.building.build_main import Analysis
-from PyInstaller.building.api import PYZ, EXE, COLLECT
-from PyInstaller.building.datastruct import TOC, Tree
-from PyInstaller.building.osx import BUNDLE
-
-block_cipher = None
-
-a = Analysis(
-    ['main.py'],
-    pathex=[],
-    binaries=[],
-    datas=[
-        ('version_config.json', '.'),
-        ('repo_config.json', '.'),
-        ('Шаблоны', 'Шаблоны')
-    ],
-    hiddenimports=[
-        # Основные модули приложения
-        'main_window', 'settings', 'theme_manager', 
-        'license_manager', 'update_manager', 'widgets',
-
-        # PyQt5 модули
-        'PyQt5', 'PyQt5.QtCore', 'PyQt5.QtGui', 'PyQt5.QtWidgets', 'PyQt5.QtNetwork',
-        'PyQt5.sip',
-
-        # Документы и шаблоны
-        'openpyxl', 'docxtpl', 'jinja2', 'docx',
-        'lxml', 'lxml.etree', 'lxml._elementpath',
-
-        # Сеть
-        'requests', 'urllib3', 'chardet', 'idna', 'certifi',
-        'email', 'email.mime', 'email.mime.text', 'email.mime.multipart',
-        'email.mime.base', 'email.encoders', 'email.utils',
-        'ssl', 'http', 'http.client', 'http.cookies',
-
-        # Системные модули
-        'hashlib', 'json', 'datetime', 'os', 'sys', 're',
-        'uuid', 'platform', 'threading', 'tempfile', 'zipfile',
-        'xml', 'xml.etree', 'xml.etree.ElementTree'
-    ],
-    hookspath=[],
-    hooksconfig={},
-    runtime_hooks=[],
-    excludes=[
-        'tkinter', 'unittest', 'test', 'pydoc',
-        'numpy', 'pandas', 'scipy', 'matplotlib', 'PIL',
-    ],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
-    noarchive=False,
-    optimize=1,
-)
-
-# Включаем все необходимые DLL
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
-
-exe = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    [],
-    name='DocumentFiller',
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
-    console=False,
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-    icon=None,
-)
-
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name='DocumentFiller'
-)
-'''
+            return False, f"Ошибка установки через ZIP: {e}"
 
     def _write_version(self, version_str):
         """Записать версию в version_config.json"""
@@ -602,8 +451,8 @@ coll = COLLECT(
             if not ok:
                 return False, result
 
-            zip_path = result
-            return self.install_update(zip_path, update_info)
+            update_path = result
+            return self.install_update(update_path, update_info)
 
         except Exception as e:
             return False, f"Ошибка обновления: {e}"
@@ -620,13 +469,11 @@ coll = COLLECT(
         """Перезапуск программы"""
         try:
             if getattr(sys, "frozen", False):
-                # Для собранного EXE
                 exe_path = os.path.join(self.script_dir, self.exe_name)
                 if os.path.exists(exe_path):
                     subprocess.Popen([exe_path], cwd=self.script_dir)
                     sys.exit(0)
             else:
-                # Для скрипта Python
                 python = sys.executable
                 main_script = os.path.join(self.script_dir, "main.py")
                 subprocess.Popen([python, main_script], cwd=self.script_dir)

@@ -726,7 +726,7 @@ class MainWindow(QMainWindow):
 
         # Группа лицензии
         license_group = QGroupBox("Лицензия")
-        license_group.setFont(QFont("Segoe UI", 19))  # Увеличенный шрифт
+        license_group.setFont(QFont("Segoe UI", 10))  # Увеличенный шрифт
         license_layout = QVBoxLayout(license_group)
 
         # Информация о лицензии

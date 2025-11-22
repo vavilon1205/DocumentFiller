@@ -1,5 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import sys
+from PyInstaller.building.build_main import Analysis
+from PyInstaller.building.api import PYZ, EXE, COLLECT
+
 block_cipher = None
 
 a = Analysis(
@@ -7,44 +11,27 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        ('version_config.json', '.'), ('repo_config.json', '.'), ('Шаблоны', 'Шаблоны')
+        ('version_config.json', '.'),
+        ('repo_config.json', '.'),
+        ('Шаблоны', 'Шаблоны')
     ],
     hiddenimports=[
-        # Основные модули приложения
         'main_window', 'settings', 'theme_manager', 
         'license_manager', 'update_manager', 'widgets',
-
-        # PyQt5 модули
         'PyQt5', 'PyQt5.QtCore', 'PyQt5.QtGui', 'PyQt5.QtWidgets', 'PyQt5.QtNetwork',
         'PyQt5.sip',
-
-        # Документы и шаблоны
         'openpyxl', 'docxtpl', 'jinja2', 'docx',
         'lxml', 'lxml.etree', 'lxml._elementpath',
-
-        # Сеть - ВАЖНО: включаем все необходимые модули для requests
         'requests', 'urllib3', 'chardet', 'idna', 'certifi',
         'email', 'email.mime', 'email.mime.text', 'email.mime.multipart',
         'email.mime.base', 'email.encoders', 'email.utils',
-        'ssl', 'http', 'http.client', 'http.cookies',
-
-        # Системные модули которые нужны для работы
         'hashlib', 'json', 'datetime', 'os', 'sys', 're',
         'uuid', 'platform', 'threading', 'tempfile', 'zipfile',
-        'xml', 'xml.etree', 'xml.etree.ElementTree'
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[
-        # Исключаем только действительно ненужные модули
-        'tkinter', 'unittest', 'test', 'pydoc',
-        'numpy', 'pandas', 'scipy', 'matplotlib', 'PIL',
-        'pygame', 'wx', 'gtk', 'curses',
-        'concurrent', 'distutils', 'setuptools',
-        'pip', 'wheel', 'pkg_resources', 'notebook',
-        'jupyter', 'ipython', 'qtpy', 'pyqtgraph'
-    ],
+    excludes=[],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
