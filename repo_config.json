@@ -1,8 +1,6 @@
 {
-  "type": "github",
-  "owner": "vavilon1205",
-  "repo": "DocumentFiller",
-  "branch": "main",
-  "token": "",
-  "update_channel": "stable"
+  "type": "yandex_disk",
+  "yandex_disk_url": "https://disk.yandex.ru/d/your_update_link/DocumentFiller_v1.0.0.exe",
+  "current_version": "1.0.14",
+  "online_license_db_url": "https://disk.yandex.ru/d/your_license_db_link/licenses_db.json"
 }

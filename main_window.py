@@ -1,14 +1,16 @@
-# main_window.py - главное окно приложения (исправленная версия)
+# main_window.py - главное окно приложения (полная исправленная версия)
 import os
 import sys
 import re
 import subprocess
+import json
 from datetime import datetime
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QLabel, QLineEdit, QPushButton, QMessageBox, QFileDialog,
                              QTableWidget, QTableWidgetItem, QHeaderView, QDialog,
                              QTabWidget, QTextEdit, QProgressBar, QMenu, QAction,
-                             QSplitter, QFormLayout, QGroupBox, QScrollArea, QAbstractItemView)
+                             QSplitter, QFormLayout, QGroupBox, QScrollArea, QAbstractItemView,
+                             QComboBox)
 from PyQt5.QtCore import Qt, QSettings, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont, QIcon, QPalette, QColor, QCursor
 from PyQt5 import QtCore
@@ -16,7 +18,7 @@ import openpyxl
 from docxtpl import DocxTemplate
 
 from widgets import ValidatedLineEdit, EditRecordDialog, RecordsTable
-from update_manager import UpdateManager  # ИСПРАВЛЕНО: изменено с updater на update_manager
+from update_manager import UpdateManager
 from license_manager import LicenseManager
 
 
@@ -94,396 +96,18 @@ class MainWindow(QMainWindow):
         self.theme_manager = theme_manager
         self.fields = {}
         self.records_data = []
-        self.is_licensed = False  # Флаг лицензии
+        self.is_licensed = False
 
         self.init_ui()
         self.load_settings()
 
-        # Инициализация менеджеров обновлений и лицензий ПОСЛЕ init_ui
+        # Инициализация менеджеров
         self.update_manager = UpdateManager()
         self.license_manager = LicenseManager(self.get_script_dir())
 
-        # АВТОМАТИЧЕСКАЯ ПРОВЕРКА ЛИЦЕНЗИИ ПРИ ЗАПУСКЕ
+        # Проверка лицензии
         self.check_license_on_startup()
-        # После инициализации UI
         QTimer.singleShot(5000, self.check_for_updates_on_startup)
-
-    def check_for_updates(self):
-        """Проверить обновления - полностью переписанная версия"""
-        try:
-            # Проверяем, настроен ли репозиторий
-            repo_info = self.update_manager.get_repository_info()
-            if not repo_info['configured']:
-                QMessageBox.information(
-                    self,
-                    "Обновления не настроены",
-                    "Функция проверки обновлений не настроена.\n\n"
-                    "Для настройки необходимо указать данные репозитория в файле конфигурации.",
-                    QMessageBox.Ok
-                )
-                return
-
-            # Создаем диалог проверки
-            checking_dialog = QMessageBox(self)
-            checking_dialog.setWindowTitle("Проверка обновлений")
-            checking_dialog.setText("Выполняется проверка обновлений...")
-            checking_dialog.setStandardButtons(QMessageBox.NoButton)
-            checking_dialog.show()
-
-            # Запускаем проверку в отдельном потоке чтобы не блокировать UI
-            from PyQt5.QtCore import QThread, pyqtSignal
-
-            class UpdateCheckThread(QThread):
-                finished = pyqtSignal(object, object)
-
-                def __init__(self, update_manager):
-                    super().__init__()
-                    self.update_manager = update_manager
-
-                def run(self):
-                    success, result = self.update_manager.check_for_updates()
-                    self.finished.emit(success, result)
-
-            self.update_thread = UpdateCheckThread(self.update_manager)
-            self.update_thread.finished.connect(
-                lambda success, result: self.on_update_check_finished(success, result, checking_dialog)
-            )
-            self.update_thread.start()
-
-        except Exception as e:
-            QMessageBox.critical(self, "Ошибка",
-                                 f"Ошибка при проверке обновлений:\n{str(e)}")
-
-    def on_update_check_finished(self, success, result, checking_dialog):
-        """Обработчик завершения проверки обновлений"""
-        checking_dialog.close()
-
-        try:
-            if not success:
-                # Обработка ошибок
-                error_message = self.get_user_friendly_error(result)
-                QMessageBox.warning(self, "Проверка обновлений", error_message)
-                return
-
-            if result == "up_to_date":
-                QMessageBox.information(self, "Проверка обновлений",
-                                        "✅ Установлена последняя версия программы.")
-                return
-
-            # Обработка доступного обновления - ВАЖНО: result теперь словарь с информацией
-            self.show_update_available_message(result)
-
-        except Exception as e:
-            QMessageBox.critical(self, "Ошибка",
-                                 f"Ошибка при обработке результата проверки:\n{str(e)}")
-
-    def get_user_friendly_error(self, technical_error):
-        """Преобразовать техническую ошибку в понятное сообщение"""
-        error_mapping = {
-            "Репозиторий не настроен": "Функция обновлений не настроена.",
-            "Репозиторий или релизы не найдены": "Обновления не найдены.",
-            "Превышен лимит запросов": "Сервис временно недоступен.",
-            "Таймаут при проверке обновлений": "Не удалось подключиться к серверу.",
-            "Ошибка подключения к интернету": "Отсутствует интернет-соединение.",
-            "Ошибка GitHub API": "Ошибка сервера обновлений.",
-            "Ошибка сервера": "Ошибка сервера обновлений."
-        }
-
-        # Ищем совпадение в сообщении об ошибке
-        for tech_error, user_error in error_mapping.items():
-            if tech_error in str(technical_error):
-                return user_error
-
-        # Если не нашли совпадение, возвращаем общее сообщение
-        return "Не удалось проверить обновления."
-
-    def show_update_available_message(self, update_info):
-        """Показать сообщение о доступном обновлении"""
-        try:
-            # Извлекаем только нужную информацию
-            version = update_info.get('version', 'Новая версия')
-
-            # Убираем префикс 'v' если есть
-            if version.startswith('v'):
-                version = version[1:]
-
-            # Форматируем описание
-            release_notes = update_info.get('release_notes', '').strip()
-            if not release_notes:
-                release_notes = "Описание изменений не предоставлено."
-            else:
-                # Ограничиваем длину описания
-                if len(release_notes) > 250:
-                    release_notes = release_notes[:250] + "..."
-
-            # Создаем чистое сообщение без технических деталей
-            message = f"Доступна новая версия программы: {version}\n\n"
-
-            if release_notes and release_notes != "Описание изменений не предоставлено.":
-                message += f"Что нового:\n{release_notes}\n\n"
-
-            message += "Хотите установить обновление?"
-
-            reply = QMessageBox.question(
-                self,
-                "Доступно обновление",
-                message,
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No  # По умолчанию "Нет"
-            )
-
-            if reply == QMessageBox.Yes:
-                self.install_update(update_info)
-
-        except Exception as e:
-            QMessageBox.critical(self, "Ошибка",
-                                 f"Ошибка при отображении информации об обновлении:\n{str(e)}")
-
-    def install_update(self, update_info):
-        """Установить обновление"""
-        try:
-            # Извлекаем версию для сообщения
-            version = update_info.get('version', '')
-            if version.startswith('v'):
-                version = version[1:]
-
-            reply = QMessageBox.question(
-                self,
-                "Подтверждение установки",
-                f"Будет установлена версия {version}.\n\n"
-                "Перед установкой будет создана резервная копия.\n"
-                "Программа будет перезапущена после установки.\n\n"
-                "Продолжить?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No  # По умолчанию "Нет"
-            )
-
-            if reply != QMessageBox.Yes:
-                return
-
-            # Создаем диалог прогресса
-            progress_dialog = QMessageBox(self)
-            progress_dialog.setWindowTitle("Установка обновления")
-            progress_dialog.setText("Выполняется установка обновления...\nПожалуйста, подождите.")
-            progress_dialog.setStandardButtons(QMessageBox.NoButton)
-            progress_dialog.show()
-
-            # Запускаем установку в отдельном потоке
-            from PyQt5.QtCore import QThread, pyqtSignal
-
-            class UpdateInstallThread(QThread):
-                finished = pyqtSignal(object, object)
-
-                def __init__(self, update_manager, update_info):
-                    super().__init__()
-                    self.update_manager = update_manager
-                    self.update_info = update_info
-
-                def run(self):
-                    success, message = self.update_manager.download_and_install_update(self.update_info)
-                    self.finished.emit(success, message)
-
-            self.install_thread = UpdateInstallThread(self.update_manager, update_info)
-            self.install_thread.finished.connect(
-                lambda success, message: self.on_update_install_finished(success, message, progress_dialog)
-            )
-            self.install_thread.start()
-
-        except Exception as e:
-            QMessageBox.critical(self, "Ошибка",
-                                 f"Ошибка при установке обновления:\n{str(e)}")
-
-    def on_update_install_finished(self, success, message, progress_dialog):
-        """Обработчик завершения установки обновления"""
-        progress_dialog.close()
-
-        if success:
-            QMessageBox.information(
-                self,
-                "Обновление установлено",
-                "✅ Обновление успешно установлено!\n\n"
-                "Программа будет перезапущена для применения изменений."
-            )
-            # Даем время прочитать сообщение
-            from PyQt5.QtCore import QTimer
-            QTimer.singleShot(2000, self.update_manager.restart_program)
-        else:
-            QMessageBox.critical(
-                self,
-                "Ошибка установки",
-                f"❌ Не удалось установить обновление:\n{message}"
-            )
-    def perform_update_check(self, checking_msg):
-        """Выполнить проверку обновлений - показываем только версию"""
-        try:
-            success, message = self.update_manager.check_for_updates()
-            checking_msg.close()
-
-            if success:
-                if message == "up_to_date":
-                    QMessageBox.information(self, "Проверка обновлений",
-                                            "✅ Установлена последняя версия программы.")
-                else:
-                    # Показываем только версию без технических деталей
-                    update_info = message
-                    version = update_info.get('version', '')
-
-                    # Очищаем версию от префикса 'v' если есть
-                    if version.startswith('v'):
-                        version = version[1:]
-
-                    # Форматируем описание изменений
-                    release_notes = update_info.get('release_notes', '').strip()
-                    if not release_notes:
-                        release_notes = "Описание изменений не предоставлено."
-                    else:
-                        # Обрезаем длинное описание
-                        if len(release_notes) > 300:
-                            release_notes = release_notes[:300] + "..."
-
-                    reply = QMessageBox.question(
-                        self,
-                        "Доступно обновление",
-                        f"Доступна новая версия программы: {version}\n\n"
-                        f"Описание изменений:\n{release_notes}\n\n"
-                        "Установить обновление?",
-                        QMessageBox.Yes | QMessageBox.No
-                    )
-                    if reply == QMessageBox.Yes:
-                        self.install_update(update_info)
-            else:
-                # Упрощенные сообщения об ошибках
-                error_messages = {
-                    "Репозиторий не настроен": "Функция обновлений не настроена.",
-                    "Репозиторий или релизы не найдены": "Обновления не найдены.",
-                    "Превышен лимит запросов": "Сервис временно недоступен.",
-                    "Таймаут при проверке обновлений": "Не удалось подключиться к серверу.",
-                    "Ошибка подключения к интернету": "Отсутствует интернет-соединение."
-                }
-
-                user_message = error_messages.get(message, "Не удалось проверить обновления.")
-                QMessageBox.warning(self, "Проверка обновлений", user_message)
-
-        except Exception as e:
-            checking_msg.close()
-            QMessageBox.critical(self, "Ошибка",
-                                 f"Ошибка при проверке обновлений:\n{str(e)}")
-    def manual_update_from_git(self):
-        """Ручное обновление через Git"""
-        return self.update_manager.perform_git_update()
-
-    def manual_update_from_zip(self, zip_url):
-        """Ручное обновление через ZIP"""
-        return self.update_manager.perform_zip_update(zip_url)
-
-    def check_for_updates_on_startup(self):
-        """Проверить обновления при запуске - тихая проверка"""
-        if hasattr(self, 'update_manager'):
-            # Задержка чтобы не мешать запуску
-            QTimer.singleShot(5000, self.silent_update_check)
-
-    def silent_update_check(self):
-        """Тихая проверка обновлений без показа диалогов"""
-        try:
-            success, result = self.update_manager.check_for_updates()
-            if success and result != "up_to_date":
-                # Показываем ненавязчивое уведомление
-                update_info = result
-                version = update_info.get('version', '')
-                if version.startswith('v'):
-                    version = version[1:]
-
-                # Создаем кастомное сообщение
-                from PyQt5.QtWidgets import QMessageBox
-                msg = QMessageBox(self)
-                msg.setWindowTitle("Доступно обновление")
-                msg.setText(f"Доступна новая версия: {version}")
-                msg.setInformativeText("Хотите установить обновление сейчас?")
-                msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
-                msg.setDefaultButton(QMessageBox.No)
-
-                reply = msg.exec_()
-                if reply == QMessageBox.Yes:
-                    self.install_update(update_info)
-        except Exception as e:
-            # Игнорируем ошибки при тихой проверке
-            print(f"Тихая проверка обновлений: {e}")
-
-    def show_update_notification(self, update_info):
-        """Показать уведомление о обновлении"""
-        reply = QMessageBox.question(
-            self,
-            "Доступно обновление",
-            f"Доступна новая версия {update_info.get('version', '')}\n\nУстановить обновление?",
-            QMessageBox.Yes | QMessageBox.No
-        )
-
-        if reply == QMessageBox.Yes:
-            self.install_update(update_info)
-
-    def install_update(self, update_info):
-        """Установить обновление - улучшенная версия"""
-        try:
-            # Показываем только версию в сообщении
-            version = update_info.get('version', '')
-            if version.startswith('v'):
-                version = version[1:]
-
-            reply = QMessageBox.question(
-                self,
-                "Подтверждение установки",
-                f"Будет установлена версия {version}.\n\n"
-                "Перед установкой будет создана резервная копия.\n"
-                "Программа будет перезапущена после установки.\n\n"
-                "Продолжить?",
-                QMessageBox.Yes | QMessageBox.No
-            )
-
-            if reply != QMessageBox.Yes:
-                return
-
-            # Создаем диалог прогресса
-            progress_dialog = QMessageBox(self)
-            progress_dialog.setWindowTitle("Установка обновления")
-            progress_dialog.setText("Выполняется установка обновления...\nПожалуйста, подождите.")
-            progress_dialog.setStandardButtons(QMessageBox.NoButton)
-            progress_dialog.show()
-
-            # Даем время отобразиться диалогу
-            from PyQt5.QtCore import QTimer
-            QTimer.singleShot(100, lambda: self.perform_update_installation(update_info, progress_dialog))
-
-        except Exception as e:
-            QMessageBox.critical(self, "Ошибка",
-                                 f"Ошибка при установке обновления:\n{str(e)}")
-
-    def perform_update_installation(self, update_info, progress_dialog):
-        """Выполнить установку обновления"""
-        try:
-            success, message = self.update_manager.download_and_install_update(update_info)
-            progress_dialog.close()
-
-            if success:
-                QMessageBox.information(
-                    self,
-                    "Обновление установлено",
-                    "✅ Обновление успешно установлено!\n\n"
-                    "Программа будет перезапущена для применения изменений."
-                )
-                self.update_manager.restart_program()
-            else:
-                QMessageBox.critical(
-                    self,
-                    "Ошибка установки",
-                    f"❌ Не удалось установить обновление:\n{message}"
-                )
-        except Exception as e:
-            progress_dialog.close()
-            QMessageBox.critical(
-                self,
-                "Ошибка",
-                f"❌ Ошибка при установке обновления:\n{str(e)}"
-            )
 
     def get_script_dir(self):
         """Получить директорию скрипта"""
@@ -492,39 +116,10 @@ class MainWindow(QMainWindow):
         else:
             return os.path.dirname(os.path.abspath(__file__))
 
-    def check_license_on_startup(self):
-        """Проверить лицензию при запуске программы"""
-        print("Проверка лицензии при запуске...")
-
-        # Проверяем лицензию
-        license_check = self.license_manager.check_license()
-        self.is_licensed = license_check[0]
-
-        if not self.is_licensed:
-            # Лицензия не действительна - блокируем программу
-            self.lock_interface()
-
-            # Показываем критическое сообщение
-            QMessageBox.critical(
-                self,
-                "Лицензия не действительна",
-                f"Программа не может быть запущена.\n\nПричина: {license_check[2]}\n\n"
-                "Пожалуйста, активируйте лицензию во вкладке 'Настройки'."
-            )
-
-            # Переходим на вкладку настроек
-            self.tab_widget.setCurrentIndex(2)
-        else:
-            # Лицензия действительна - разблокируем интерфейс
-            self.unlock_interface()
-
-        # ОБНОВЛЯЕМ СТАТУС ЛИЦЕНЗИИ В ИНТЕРФЕЙСЕ ПРИ ЗАПУСКЕ
-        self.update_license_status()
-
     def init_ui(self):
         """Инициализация интерфейса"""
         self.setWindowTitle("Программа заполнения согласий и личных карточек")
-        self.setGeometry(100, 100, 1200, 800)  # Увеличил размер окна
+        self.setGeometry(100, 100, 1200, 800)
 
         # Центральный виджет
         central_widget = QWidget()
@@ -535,8 +130,8 @@ class MainWindow(QMainWindow):
 
         # Создаем табы
         self.tab_widget = QTabWidget()
-        self.tab_widget.setFont(QFont("Segoe UI", 14))  # Увеличенный шрифт для табов
-        self.tab_widget.currentChanged.connect(self.on_tab_changed)  # Обработчик смены вкладки
+        self.tab_widget.setFont(QFont("Segoe UI", 14))
+        self.tab_widget.currentChanged.connect(self.on_tab_changed)
         layout.addWidget(self.tab_widget)
 
         # Вкладка ввода данных
@@ -560,10 +155,8 @@ class MainWindow(QMainWindow):
     def on_tab_changed(self, index):
         """Обработчик смены вкладки"""
         try:
-            # Если переключаемся на вкладку с таблицей, загружаем состояние
-            if index == 1 and hasattr(self, 'records_table'):  # Вкладка "Сохраненные анкеты"
+            if index == 1 and hasattr(self, 'records_table'):
                 print("Переключились на вкладку с таблицей, загружаем состояние...")
-                # Используем таймер для гарантии, что таблица уже отобразилась
                 QTimer.singleShot(50, self.records_table.load_state)
         except Exception as e:
             print(f"Ошибка при смене вкладки: {e}")
@@ -571,14 +164,14 @@ class MainWindow(QMainWindow):
     def setup_input_tab(self, parent):
         """Настройка вкладки ввода данных"""
         layout = QVBoxLayout(parent)
-        layout.setSpacing(8)  # Уменьшаем общее расстояние между элементами
-        layout.setContentsMargins(8, 8, 8, 8)  # Уменьшаем поля
+        layout.setSpacing(8)
+        layout.setContentsMargins(8, 8, 8, 8)
 
         # Поля ввода
         form_widget = QWidget()
         form_layout = QFormLayout(form_widget)
-        form_layout.setSpacing(6)  # Уменьшаем расстояние между строками формы
-        form_layout.setContentsMargins(5, 5, 5, 5)  # Уменьшаем поля формы
+        form_layout.setSpacing(6)
+        form_layout.setContentsMargins(5, 5, 5, 5)
 
         for key, label in self.get_field_keys():
             if key == 'cs':
@@ -599,7 +192,7 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(form_widget)
 
-        # Папка сохранения - компактная версия
+        # Папка сохранения
         path_layout = QHBoxLayout()
         path_layout.setSpacing(8)
 
@@ -656,69 +249,62 @@ class MainWindow(QMainWindow):
         buttons_layout = QHBoxLayout()
 
         refresh_btn = QPushButton("Обновить")
-        refresh_btn.setFont(QFont("Segoe UI", 14))  # Увеличенный шрифт
+        refresh_btn.setFont(QFont("Segoe UI", 14))
         refresh_btn.clicked.connect(self.load_records)
         buttons_layout.addWidget(refresh_btn)
 
         load_btn = QPushButton("Загрузить в форму")
-        load_btn.setFont(QFont("Segoe UI", 14))  # Увеличенный шрифт
+        load_btn.setFont(QFont("Segoe UI", 14))
         load_btn.clicked.connect(self.load_selected_record)
         buttons_layout.addWidget(load_btn)
 
         edit_btn = QPushButton("Изменить")
-        edit_btn.setFont(QFont("Segoe UI", 14))  # Увеличенный шрифт
+        edit_btn.setFont(QFont("Segoe UI", 14))
         edit_btn.clicked.connect(self.edit_selected_record)
         buttons_layout.addWidget(edit_btn)
 
         delete_btn = QPushButton("Удалить")
-        delete_btn.setFont(QFont("Segoe UI", 14))  # Увеличенный шрифт
+        delete_btn.setFont(QFont("Segoe UI", 14))
         delete_btn.clicked.connect(self.delete_selected_record)
         buttons_layout.addWidget(delete_btn)
 
         layout.addLayout(buttons_layout)
 
-        # Таблица записей с сортировкой и сохранением состояния
+        # Таблица записей
         self.records_table = RecordsTable(self.settings)
-
-        # Добавляем +1 колонку для скрытого номера строки
         self.records_table.setColumnCount(len(self.get_field_keys()) + 1)
         headers = [label for _, label in self.get_field_keys()] + ["RowNum"]
         self.records_table.setHorizontalHeaderLabels(headers)
 
-        # Устанавливаем увеличенный шрифт для заголовков таблицы
         font = QFont("Segoe UI", 13)
         self.records_table.horizontalHeader().setFont(font)
-        self.records_table.setFont(font)  # Шрифт для содержимого таблицы
+        self.records_table.setFont(font)
 
-        # Скрываем последнюю колонку с номером строки
         self.records_table.setColumnHidden(len(self.get_field_keys()), True)
-
         self.records_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.records_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.records_table.customContextMenuRequested.connect(self.show_records_context_menu)
         self.records_table.doubleClicked.connect(self.load_selected_record_double_click)
 
         layout.addWidget(self.records_table)
-
-        # Загружаем записи
         self.load_records()
 
     def setup_settings_tab(self, parent):
-        """Настройка вкладки настроек"""
+        """Настройка вкладки настроек - упрощенная версия"""
         layout = QVBoxLayout(parent)
 
         # Группа тем
         theme_group = QGroupBox("Тема оформления")
-        theme_group.setFont(QFont("Segoe UI", 12))  # Увеличенный шрифт
+        theme_group.setFont(QFont("Segoe UI", 12))
         theme_layout = QHBoxLayout(theme_group)
 
         self.light_theme_btn = QPushButton("Светлая")
-        self.light_theme_btn.setFont(QFont("Segoe UI", 12))  # Увеличенный шрифт
+        self.light_theme_btn.setFont(QFont("Segoe UI", 12))
         self.light_theme_btn.clicked.connect(lambda: self.change_theme('light'))
         theme_layout.addWidget(self.light_theme_btn)
 
         self.dark_theme_btn = QPushButton("Темная")
-        self.dark_theme_btn.setFont(QFont("Segoe UI", 12))  # Увеличенный шрифт
+        self.dark_theme_btn.setFont(QFont("Segoe UI", 12))
         self.dark_theme_btn.clicked.connect(lambda: self.change_theme('dark'))
         theme_layout.addWidget(self.dark_theme_btn)
 
@@ -726,24 +312,24 @@ class MainWindow(QMainWindow):
 
         # Группа лицензии
         license_group = QGroupBox("Лицензия")
-        license_group.setFont(QFont("Segoe UI", 10))  # Увеличенный шрифт
+        license_group.setFont(QFont("Segoe UI", 13))
         license_layout = QVBoxLayout(license_group)
 
         # Информация о лицензии
         license_info_layout = QHBoxLayout()
         license_type_label = QLabel("Тип лицензии:")
-        license_type_label.setFont(QFont("Segoe UI", 12))  # Увеличенный шрифт
+        license_type_label.setFont(QFont("Segoe UI", 12))
         license_info_layout.addWidget(license_type_label)
         self.license_type_label = QLabel("Не активирована")
-        self.license_type_label.setFont(QFont("Segoe UI", 12))  # Увеличенный шрифт
+        self.license_type_label.setFont(QFont("Segoe UI", 12))
         license_info_layout.addWidget(self.license_type_label)
         license_info_layout.addStretch()
 
         license_days_label = QLabel("Осталось дней:")
-        license_days_label.setFont(QFont("Segoe UI", 12))  # Увеличенный шрифт
+        license_days_label.setFont(QFont("Segoe UI", 12))
         license_info_layout.addWidget(license_days_label)
         self.license_days_label = QLabel("0")
-        self.license_days_label.setFont(QFont("Segoe UI", 12))  # Увеличенный шрифт
+        self.license_days_label.setFont(QFont("Segoe UI", 12))
         license_info_layout.addWidget(self.license_days_label)
 
         license_layout.addLayout(license_info_layout)
@@ -751,21 +337,21 @@ class MainWindow(QMainWindow):
         # Поле для ввода ключа
         key_layout = QHBoxLayout()
         key_label = QLabel("Лицензионный ключ:")
-        key_label.setFont(QFont("Segoe UI", 13))  # Увеличенный шрифт
+        key_label.setFont(QFont("Segoe UI", 13))
         key_layout.addWidget(key_label)
 
         self.license_edit = QLineEdit()
-        self.license_edit.setFont(QFont("Segoe UI", 13))  # Увеличенный шрифт
+        self.license_edit.setFont(QFont("Segoe UI", 13))
         self.license_edit.setPlaceholderText("Введите лицензионный ключ")
         key_layout.addWidget(self.license_edit)
 
         license_layout.addLayout(key_layout)
 
-        # Кнопки лицензии - ТОЛЬКО АКТИВИРОВАТЬ
+        # Кнопки лицензии
         license_buttons_layout = QHBoxLayout()
 
         activate_btn = QPushButton("Активировать")
-        activate_btn.setFont(QFont("Segoe UI", 13))  # Увеличенный шрифт
+        activate_btn.setFont(QFont("Segoe UI", 13))
         activate_btn.clicked.connect(self.activate_license)
         license_buttons_layout.addWidget(activate_btn)
 
@@ -773,47 +359,20 @@ class MainWindow(QMainWindow):
 
         # Статус лицензии
         self.license_status_label = QLabel("Статус: Не проверено")
-        self.license_status_label.setFont(QFont("Segoe UI", 13))  # Увеличенный шрифт
+        self.license_status_label.setFont(QFont("Segoe UI", 13))
         license_layout.addWidget(self.license_status_label)
 
         layout.addWidget(license_group)
 
-        # Группа обновлений
-        update_group = QGroupBox("Обновления")
-        update_group.setFont(QFont("Segoe UI", 13))  # Увеличенный шрифт
-        update_layout = QVBoxLayout(update_group)
-
-        self.check_update_btn = QPushButton("Проверить обновления")
-        self.check_update_btn.setFont(QFont("Segoe UI", 13))  # Увеличенный шрифт
-        self.check_update_btn.clicked.connect(self.check_for_updates)
-        update_layout.addWidget(self.check_update_btn)
-
-        self.manual_update_btn = QPushButton("Установить обновление вручную")
-        self.manual_update_btn.setFont(QFont("Segoe UI", 13))  # Увеличенный шрифт
-        self.manual_update_btn.clicked.connect(self.manual_update)
-        update_layout.addWidget(self.manual_update_btn)
-
-        self.backup_btn = QPushButton("Создать резервную копию")
-        self.backup_btn.setFont(QFont("Segoe UI", 13))  # Увеличенный шрифт
-        self.backup_btn.clicked.connect(self.create_backup)
-        update_layout.addWidget(self.backup_btn)
-
-        self.restore_btn = QPushButton("Восстановить из копии")
-        self.restore_btn.setFont(QFont("Segoe UI", 13))  # Увеличенный шрифт
-        self.restore_btn.clicked.connect(self.restore_backup)
-        update_layout.addWidget(self.restore_btn)
-
-        layout.addWidget(update_group)
-
         # Группа информации
         info_group = QGroupBox("О программе")
-        info_group.setFont(QFont("Segoe UI", 13))  # Увеличенный шрифт
+        info_group.setFont(QFont("Segoe UI", 13))
         info_layout = QVBoxLayout(info_group)
 
         about_text = QTextEdit()
         about_text.setReadOnly(True)
-        about_text.setFont(QFont("Segoe UI", 12))  # Увеличенный шрифт
-        about_text.setHtml(f"""<pre style="font-family: 'Courier New', monospace; background: #f0f0f0; padding: 10px; border-radius: 5px;">
+        about_text.setFont(QFont("Segoe UI", 12))
+        about_text.setHtml(f"""<pre style="font-family: 'Courier New', background: #f0f0f0; padding: 10px; border-radius: 5px;">
  👨‍💻 РАЗРАБОТЧИК
  📛 Строчков Сергей Константинович
  📞 8(920)791-30-43
@@ -823,33 +382,34 @@ class MainWindow(QMainWindow):
         info_layout.addWidget(about_text)
 
         layout.addWidget(info_group)
+
         layout.addStretch()
 
-        # Обновляем статус лицензии (будет обновлено позже)
-        self.license_status_label.setText("Статус: Инициализация...")
+        # Обновляем статус лицензии после инициализации
+        QTimer.singleShot(100, self.update_license_status)
 
     def create_menu(self):
         """Создание меню"""
         menubar = self.menuBar()
-        menubar.setFont(QFont("Segoe UI", 12))  # Увеличенный шрифт для меню
+        menubar.setFont(QFont("Segoe UI", 12))
 
         # Меню Файл
         file_menu = menubar.addMenu('Файл')
 
         save_action = QAction('Сохранить данные', self)
-        save_action.setFont(QFont("Segoe UI", 12))  # Увеличенный шрифт
+        save_action.setFont(QFont("Segoe UI", 12))
         save_action.triggered.connect(self.save_data)
         file_menu.addAction(save_action)
 
         create_action = QAction('Создать документы', self)
-        create_action.setFont(QFont("Segoe UI", 14))  # Увеличенный шрифт
+        create_action.setFont(QFont("Segoe UI", 14))
         create_action.triggered.connect(self.create_documents)
         file_menu.addAction(create_action)
 
         file_menu.addSeparator()
 
         exit_action = QAction('Выход', self)
-        exit_action.setFont(QFont("Segoe UI", 12))  # Увеличенный шрифт
+        exit_action.setFont(QFont("Segoe UI", 12))
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
@@ -857,12 +417,12 @@ class MainWindow(QMainWindow):
         view_menu = menubar.addMenu('Вид')
 
         light_theme_action = QAction('Светлая тема', self)
-        light_theme_action.setFont(QFont("Segoe UI", 12))  # Увеличенный шрифт
+        light_theme_action.setFont(QFont("Segoe UI", 12))
         light_theme_action.triggered.connect(lambda: self.change_theme('light'))
         view_menu.addAction(light_theme_action)
 
         dark_theme_action = QAction('Темная тема', self)
-        dark_theme_action.setFont(QFont("Segoe UI", 12))  # Увеличенный шрифт
+        dark_theme_action.setFont(QFont("Segoe UI", 12))
         dark_theme_action.triggered.connect(lambda: self.change_theme('dark'))
         view_menu.addAction(dark_theme_action)
 
@@ -870,31 +430,14 @@ class MainWindow(QMainWindow):
         service_menu = menubar.addMenu('Сервис')
 
         update_action = QAction('Проверить обновления', self)
-        update_action.setFont(QFont("Segoe UI", 14))  # Увеличенный шрифт
+        update_action.setFont(QFont("Segoe UI", 14))
         update_action.triggered.connect(self.check_for_updates)
         service_menu.addAction(update_action)
-
-        manual_update_action = QAction('Установить обновление вручную', self)
-        manual_update_action.setFont(QFont("Segoe UI", 14))  # Увеличенный шрифт
-        manual_update_action.triggered.connect(self.manual_update)
-        service_menu.addAction(manual_update_action)
-
-        service_menu.addSeparator()
-
-        backup_action = QAction('Создать резервную копию', self)
-        backup_action.setFont(QFont("Segoe UI", 14))  # Увеличенный шрифт
-        backup_action.triggered.connect(self.create_backup)
-        service_menu.addAction(backup_action)
-
-        restore_action = QAction('Восстановить из копии', self)
-        restore_action.setFont(QFont("Segoe UI", 14))  # Увеличенный шрифт
-        restore_action.triggered.connect(self.restore_backup)
-        service_menu.addAction(restore_action)
 
         service_menu.addSeparator()
 
         license_action = QAction('Активировать лицензию', self)
-        license_action.setFont(QFont("Segoe UI", 14))  # Увеличенный шрифт
+        license_action.setFont(QFont("Segoe UI", 14))
         license_action.triggered.connect(self.show_license_dialog)
         service_menu.addAction(license_action)
 
@@ -902,7 +445,7 @@ class MainWindow(QMainWindow):
         help_menu = menubar.addMenu('Справка')
 
         about_action = QAction('О программе', self)
-        about_action.setFont(QFont("Segoe UI", 14))  # Увеличенный шрифт
+        about_action.setFont(QFont("Segoe UI", 14))
         about_action.triggered.connect(self.show_about)
         help_menu.addAction(about_action)
 
@@ -931,7 +474,6 @@ class MainWindow(QMainWindow):
         if state:
             self.restoreState(state)
 
-        # Загружаем последний путь сохранения
         last_path = self.settings.get_last_save_path()
         if last_path:
             self.save_path_edit.setText(last_path)
@@ -1152,7 +694,7 @@ class MainWindow(QMainWindow):
             return None
 
     def load_records(self):
-        """Загрузить записи в таблицу - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
+        """Загрузить записи в таблицу"""
         try:
             excel_path = self.get_excel_file_path()
             if not os.path.exists(excel_path):
@@ -1165,7 +707,7 @@ class MainWindow(QMainWindow):
             # Получаем данные
             data = []
             for row in range(2, sheet.max_row + 1):
-                record = {'_row_number': row}  # Сохраняем реальный номер строки в Excel
+                record = {'_row_number': row}
                 for col, (key, _) in enumerate(self.get_field_keys(), 1):
                     cell_value = sheet.cell(row=row, column=col).value
                     record[key] = str(cell_value) if cell_value is not None else ""
@@ -1229,7 +771,7 @@ class MainWindow(QMainWindow):
             print(f"Ошибка при двойном клике: {e}")
 
     def load_selected_record(self):
-        """Загручить выбранную запись в форму - с проверкой лицензии"""
+        """Загрузить выбранную запись в форму - с проверкой лицензии"""
         if not self.is_licensed:
             QMessageBox.warning(self, "Лицензия не активирована",
                                 "Для загрузки записей необходимо активировать лицензию.")
@@ -1280,7 +822,7 @@ class MainWindow(QMainWindow):
                 success, message = self.save_to_excel(new_values)
                 if success:
                     QMessageBox.information(self, "Успех", message)
-                    self.load_records()  # Перезагружаем таблицу
+                    self.load_records()
                 else:
                     QMessageBox.critical(self, "Ошибка", message)
 
@@ -1322,7 +864,7 @@ class MainWindow(QMainWindow):
                     wb.save(excel_path)
 
                     QMessageBox.information(self, "Удалено", "Запись удалена.")
-                    self.load_records()  # Перезагружаем таблицу
+                    self.load_records()
 
                 except Exception as e:
                     QMessageBox.critical(self, "Ошибка", f"Не удалось удалить запись: {str(e)}")
@@ -1349,7 +891,7 @@ class MainWindow(QMainWindow):
         if not self.is_licensed:
             QMessageBox.warning(self, "Лицензия не активирована",
                                 "Для сохранения данных необходимо активировать лицензию.")
-            self.tab_widget.setCurrentIndex(2)  # Переходим на вкладку настроек
+            self.tab_widget.setCurrentIndex(2)
             return
 
         try:
@@ -1366,7 +908,7 @@ class MainWindow(QMainWindow):
             success, message = self.save_to_excel(values)
             if success:
                 QMessageBox.information(self, "Успех", message)
-                self.load_records()  # Обновляем таблицу
+                self.load_records()
             else:
                 QMessageBox.critical(self, "Ошибка", message)
         except Exception as e:
@@ -1377,7 +919,7 @@ class MainWindow(QMainWindow):
         if not self.is_licensed:
             QMessageBox.warning(self, "Лицензия не активирована",
                                 "Для создания документов необходимо активировать лицензию.")
-            self.tab_widget.setCurrentIndex(2)  # Переходим на вкладку настроек
+            self.tab_widget.setCurrentIndex(2)
             return
 
         try:
@@ -1452,7 +994,7 @@ class MainWindow(QMainWindow):
         if not self.is_licensed:
             QMessageBox.warning(self, "Лицензия не активирована",
                                 "Для работы с Excel необходимо активировать лицензию.")
-            self.tab_widget.setCurrentIndex(2)  # Переходим на вкладку настроек
+            self.tab_widget.setCurrentIndex(2)
             return
 
         try:
@@ -1482,167 +1024,97 @@ class MainWindow(QMainWindow):
             print(f"Ошибка при смене темы: {e}")
 
     def check_for_updates(self):
-        """Проверить обновления"""
+        """Проверить обновления - упрощенная версия"""
         try:
-            success, message = self.update_manager.check_for_updates()
+            print("Проверка обновлений...")
+            success, result = self.update_manager.check_for_updates()
+
             if success:
-                if message == "up_to_date":
-                    QMessageBox.information(self, "Обновления", "У вас установлена последняя версия программы.")
+                if result == "up_to_date":
+                    QMessageBox.information(self, "Обновления",
+                                            "✅ Установлена последняя версия программы.")
                 else:
+                    # Доступно обновление
+                    update_info = result
+                    version = update_info.get('version', 'Новая версия')
+
                     reply = QMessageBox.question(
                         self,
                         "Доступно обновление",
-                        f"Доступна новая версия: {message}\n\nУстановить обновление?",
+                        f"Доступна новая версия программы: {version}\n\n"
+                        f"Описание: {update_info.get('release_notes', 'Нет описания')}\n\n"
+                        "Установить обновление сейчас?",
                         QMessageBox.Yes | QMessageBox.No
                     )
+
                     if reply == QMessageBox.Yes:
-                        self.update_manager.download_and_install_update()
+                        self.install_update(update_info)
             else:
-                QMessageBox.warning(self, "Обновления", f"Не удалось проверить обновления: {message}")
+                QMessageBox.warning(self, "Обновления",
+                                    f"Не удалось проверить обновления:\n{result}")
+
         except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Ошибка при проверке обновлений: {str(e)}")
+            QMessageBox.critical(self, "Ошибка",
+                                 f"Ошибка при проверке обновлений:\n{str(e)}")
 
-    def manual_update(self):
-        """Ручное обновление"""
-        try:
-            zip_file, _ = QFileDialog.getOpenFileName(
-                self,
-                "Выберите файл обновления (.zip)",
-                "",
-                "ZIP files (*.zip);;All files (*.*)"
-            )
-
-            if zip_file:
-                reply = QMessageBox.question(
-                    self,
-                    "Подтверждение",
-                    "Установить выбранное обновление? Перед установкой будет создана резервная копия.",
-                    QMessageBox.Yes | QMessageBox.No
-                )
-                if reply == QMessageBox.Yes:
-                    success, message = self.update_manager.manual_update(zip_file)
-                    if success:
-                        QMessageBox.information(self, "Обновление",
-                                                "Обновление успешно установлено. Программа будет перезапущена.")
-                        self.update_manager.restart_program()
-                    else:
-                        QMessageBox.critical(self, "Ошибка обновления", message)
-        except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Ошибка при ручном обновлении: {str(e)}")
-
-    def create_backup(self):
-        """Создать резервную копию"""
-        try:
-            success, message = self.update_manager.create_backup()
-            if success:
-                QMessageBox.information(self, "Резервная копия", message)
-            else:
-                QMessageBox.critical(self, "Ошибка", message)
-        except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Ошибка при создании резервной копии: {str(e)}")
-
-    def restore_backup(self):
-        """Восстановить из резервной копии"""
+    def install_update(self, update_info):
+        """Установить обновление"""
         try:
             reply = QMessageBox.question(
                 self,
-                "Восстановление",
-                "Восстановить данные из последней резервной копии?",
+                "Подтверждение установки",
+                "Будет установлено обновление.\n\n"
+                "Перед установкой будет создана резервная копия.\n"
+                "Программа будет перезапущена после установки.\n\n"
+                "Продолжить?",
                 QMessageBox.Yes | QMessageBox.No
             )
-            if reply == QMessageBox.Yes:
-                success, message = self.update_manager.restore_backup()
-                if success:
-                    QMessageBox.information(self, "Восстановление", message)
-                    self.load_records()  # Перезагружаем записи
-                else:
-                    QMessageBox.critical(self, "Ошибка", message)
+
+            if reply != QMessageBox.Yes:
+                return
+
+            # Создаем диалог прогресса
+            progress_dialog = QMessageBox(self)
+            progress_dialog.setWindowTitle("Установка обновления")
+            progress_dialog.setText("Выполняется установка обновления...\nПожалуйста, подождите.")
+            progress_dialog.setStandardButtons(QMessageBox.NoButton)
+            progress_dialog.show()
+
+            # Даем время отобразиться диалогу
+            QTimer.singleShot(100, lambda: self.perform_update_installation(update_info, progress_dialog))
+
         except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Ошибка при восстановлении из резервной копии: {str(e)}")
+            QMessageBox.critical(self, "Ошибка", f"Ошибка при установке обновления:\n{str(e)}")
 
-    def lock_interface(self):
-        """Заблокировать интерфейс при отсутствии лицензии"""
-        # Блокируем все вкладки кроме настроек
-        self.tab_widget.setTabEnabled(0, False)  # Ввод данных
-        self.tab_widget.setTabEnabled(1, False)  # Сохраненные анкеты
+    def perform_update_installation(self, update_info, progress_dialog):
+        """Выполнить установку обновления"""
+        try:
+            success, message = self.update_manager.download_and_install_update(update_info)
+            progress_dialog.close()
 
-        # Блокируем меню, кроме настроек и справки
-        menubar = self.menuBar()
-        for action in menubar.actions():
-            if action.text() not in ['Сервис', 'Справка']:
-                action.setEnabled(False)
-
-        # Блокируем кнопки в настройках, кроме лицензии
-        self.light_theme_btn.setEnabled(False)
-        self.dark_theme_btn.setEnabled(False)
-        self.check_update_btn.setEnabled(False)
-        self.manual_update_btn.setEnabled(False)
-        self.backup_btn.setEnabled(False)
-        self.restore_btn.setEnabled(False)
-
-        # Показываем сообщение о необходимости активации
-        self.show_license_required_message()
-
-    def unlock_interface(self):
-        """Разблокировать интерфейс при наличии лицензии"""
-        # Разблокируем все вкладки
-        self.tab_widget.setTabEnabled(0, True)  # Ввод данных
-        self.tab_widget.setTabEnabled(1, True)  # Сохраненные анкеты
-        self.tab_widget.setTabEnabled(2, True)  # Настройки
-
-        # Разблокируем меню
-        menubar = self.menuBar()
-        for action in menubar.actions():
-            action.setEnabled(True)
-
-        # Разблокируем кнопки в настройках
-        self.light_theme_btn.setEnabled(True)
-        self.dark_theme_btn.setEnabled(True)
-        self.check_update_btn.setEnabled(True)
-        self.manual_update_btn.setEnabled(True)
-        self.backup_btn.setEnabled(True)
-        self.restore_btn.setEnabled(True)
-
-        # Убираем сообщение о необходимости активации
-        self.hide_license_required_message()
-
-    def show_license_required_message(self):
-        """Показать сообщение о необходимости активации"""
-        if hasattr(self, 'license_message_label'):
-            self.license_message_label.show()
-            return
-
-        self.license_message_label = QLabel(
-            "⚠️ ТРЕБУЕТСЯ АКТИВАЦИЯ ЛИЦЕНЗИИ\n"
-            "Для использования программы необходимо активировать лицензию во вкладке 'Настройки'"
-        )
-        self.license_message_label.setAlignment(Qt.AlignCenter)
-        self.license_message_label.setStyleSheet(
-            "QLabel {"
-            "background-color: #ffeb3b;"
-            "color: #ff5722;"
-            "font-weight: bold;"
-            "font-size: 14px;"
-            "padding: 10px;"
-            "border: 2px solid #ff9800;"
-            "border-radius: 5px;"
-            "margin: 5px;"
-            "}"
-        )
-        self.license_message_label.setFont(QFont("Segoe UI", 12, QFont.Bold))
-
-        # Добавляем сообщение в главный layout
-        main_widget = self.centralWidget()
-        main_layout = main_widget.layout()
-        main_layout.insertWidget(0, self.license_message_label)
-
-    def hide_license_required_message(self):
-        """Скрыть сообщение о необходимости активации"""
-        if hasattr(self, 'license_message_label'):
-            self.license_message_label.hide()
+            if success:
+                QMessageBox.information(
+                    self,
+                    "Обновление установлено",
+                    "✅ Обновление успешно установлено!\n\n"
+                    "Программа будет перезапущена для применения изменений."
+                )
+            else:
+                QMessageBox.critical(
+                    self,
+                    "Ошибка установки",
+                    f"❌ Не удалось установить обновление:\n{message}"
+                )
+        except Exception as e:
+            progress_dialog.close()
+            QMessageBox.critical(
+                self,
+                "Ошибка",
+                f"❌ Ошибка при установке обновления:\n{str(e)}"
+            )
 
     def activate_license(self):
-        """Активировать лицензию - обновленная версия"""
+        """Активировать лицензию"""
         try:
             license_key = self.license_edit.text().strip()
             if not license_key:
@@ -1668,44 +1140,6 @@ class MainWindow(QMainWindow):
             self.update_license_status()
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Ошибка при активации лицензии: {str(e)}")
-
-    def update_license_status(self):
-        """Обновить статус лицензии в интерфейсе - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
-        try:
-            license_info = self.license_manager.get_license_info()
-
-            is_valid = license_info['is_valid']
-            days_left = license_info['days_left']
-            message = license_info['message']
-            license_type = license_info['type']
-            is_trial = license_info.get('is_trial', False)
-
-            # Обновляем метки
-            if is_trial:
-                self.license_type_label.setText("Пробный период")
-                status_text = f"Пробный период ({days_left} дней)"
-            elif license_type == 'premium':
-                self.license_type_label.setText("Премиум")
-                status_text = f"Премиум ({days_left} дней)"
-            else:
-                self.license_type_label.setText("Не активирована")
-                status_text = "Не активирована"
-
-            self.license_days_label.setText(str(days_left))
-
-            if is_valid:
-                self.license_status_label.setText(f"Статус: {status_text}")
-            else:
-                self.license_status_label.setText(f"Статус: {message}")
-
-            # Сохраняем состояние лицензии в настройках
-            self.settings.settings.setValue("license/is_licensed", self.is_licensed)
-            self.settings.settings.setValue("license/type", license_type)
-            self.settings.settings.setValue("license/days_left", days_left)
-            self.settings.settings.setValue("license/is_trial", is_trial)
-
-        except Exception as e:
-            print(f"Ошибка при обновлении статуса лицензии: {e}")
 
     def show_license_dialog(self):
         """Показать диалог активации лицензии"""
@@ -1783,21 +1217,16 @@ class MainWindow(QMainWindow):
     def show_about(self):
         """Показать информацию о программе"""
         try:
-            # Безопасное получение версии
+            # Получаем версию из repo_config.json
             version = "1.0.0"
-            if hasattr(self, 'update_manager'):
-                try:
-                    version = self.update_manager.current_version
-                except Exception:
-                    # Если не удалось получить версию из update_manager, пробуем из конфига
-                    try:
-                        version_path = os.path.join(self.get_script_dir(), 'version_config.json')
-                        if os.path.exists(version_path):
-                            with open(version_path, 'r', encoding='utf-8') as f:
-                                version_data = json.load(f)
-                                version = version_data.get('current_version', '1.0.0')
-                    except:
-                        pass
+            try:
+                config_path = os.path.join(self.get_script_dir(), 'repo_config.json')
+                if os.path.exists(config_path):
+                    with open(config_path, 'r', encoding='utf-8') as f:
+                        config_data = json.load(f)
+                        version = config_data.get('current_version', '1.0.0')
+            except:
+                pass
 
             QMessageBox.about(
                 self,
@@ -1811,8 +1240,170 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Ошибка при показе информации о программе: {str(e)}")
 
+    def check_for_updates_on_startup(self):
+        """Проверить обновления при запуске - тихая проверка"""
+        if hasattr(self, 'update_manager'):
+            # Задержка чтобы не мешать запуску
+            QTimer.singleShot(5000, self.silent_update_check)
+
+    def silent_update_check(self):
+        """Тихая проверка обновлений без показа диалогов"""
+        try:
+            success, result = self.update_manager.check_for_updates()
+            if success and result != "up_to_date":
+                # Показываем ненавязчивое уведомление
+                update_info = result
+                version = update_info.get('version', '')
+                if version.startswith('v'):
+                    version = version[1:]
+
+                # Создаем кастомное сообщение
+                msg = QMessageBox(self)
+                msg.setWindowTitle("Доступно обновление")
+                msg.setText(f"Доступна новая версия: {version}")
+                msg.setInformativeText("Хотите установить обновление сейчас?")
+                msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+                msg.setDefaultButton(QMessageBox.No)
+
+                reply = msg.exec_()
+                if reply == QMessageBox.Yes:
+                    self.install_update(update_info)
+        except Exception as e:
+            # Игнорируем ошибки при тихой проверке
+            print(f"Тихая проверка обновлений: {e}")
+
+    def lock_interface(self):
+        """Заблокировать интерфейс при отсутствии лицензии"""
+        self.tab_widget.setTabEnabled(0, False)
+        self.tab_widget.setTabEnabled(1, False)
+
+        menubar = self.menuBar()
+        for action in menubar.actions():
+            if action.text() not in ['Сервис', 'Справка']:
+                action.setEnabled(False)
+
+        self.light_theme_btn.setEnabled(False)
+        self.dark_theme_btn.setEnabled(False)
+
+        self.show_license_required_message()
+
+    def unlock_interface(self):
+        """Разблокировать интерфейс при наличии лицензии"""
+        self.tab_widget.setTabEnabled(0, True)
+        self.tab_widget.setTabEnabled(1, True)
+        self.tab_widget.setTabEnabled(2, True)
+
+        menubar = self.menuBar()
+        for action in menubar.actions():
+            action.setEnabled(True)
+
+        self.light_theme_btn.setEnabled(True)
+        self.dark_theme_btn.setEnabled(True)
+
+        self.hide_license_required_message()
+
+    def show_license_required_message(self):
+        """Показать сообщение о необходимости активации"""
+        if hasattr(self, 'license_message_label'):
+            self.license_message_label.show()
+            return
+
+        self.license_message_label = QLabel(
+            "⚠️ ТРЕБУЕТСЯ АКТИВАЦИЯ ЛИЦЕНЗИИ\n"
+            "Для использования программы необходимо активировать лицензию во вкладке 'Настройки'"
+        )
+        self.license_message_label.setAlignment(Qt.AlignCenter)
+        self.license_message_label.setStyleSheet(
+            "QLabel {"
+            "background-color: #ffeb3b;"
+            "color: #ff5722;"
+            "font-weight: bold;"
+            "font-size: 14px;"
+            "padding: 10px;"
+            "border: 2px solid #ff9800;"
+            "border-radius: 5px;"
+            "margin: 5px;"
+            "}"
+        )
+        self.license_message_label.setFont(QFont("Segoe UI", 12, QFont.Bold))
+
+        main_widget = self.centralWidget()
+        main_layout = main_widget.layout()
+        main_layout.insertWidget(0, self.license_message_label)
+
+    def hide_license_required_message(self):
+        """Скрыть сообщение о необходимости активации"""
+        if hasattr(self, 'license_message_label'):
+            self.license_message_label.hide()
+
+    def check_license_on_startup(self):
+        """Проверить лицензию при запуске программы"""
+        print("Проверка лицензии при запуске...")
+
+        # Проверяем лицензию
+        license_check = self.license_manager.check_license()
+        self.is_licensed = license_check[0]
+
+        if not self.is_licensed:
+            # Лицензия не действительна - блокируем программу
+            self.lock_interface()
+
+            # Показываем критическое сообщение
+            QMessageBox.critical(
+                self,
+                "Лицензия не действительна",
+                f"Программа не может быть запущена.\n\nПричина: {license_check[2]}\n\n"
+                "Пожалуйста, активируйте лицензию во вкладке 'Настройки'."
+            )
+
+            # Переходим на вкладку настроек
+            self.tab_widget.setCurrentIndex(2)
+        else:
+            # Лицензия действительна - разблокируем интерфейс
+            self.unlock_interface()
+
+        # ОБНОВЛЯЕМ СТАТУС ЛИЦЕНЗИИ В ИНТЕРФЕЙСЕ ПРИ ЗАПУСКЕ
+        self.update_license_status()
+
+    def update_license_status(self):
+        """Обновить статус лицензии в интерфейсе"""
+        try:
+            license_info = self.license_manager.get_license_info()
+
+            is_valid = license_info['is_valid']
+            days_left = license_info['days_left']
+            message = license_info['message']
+            license_type = license_info['type']
+            is_trial = license_info.get('is_trial', False)
+
+            if is_trial:
+                self.license_type_label.setText("Пробный период")
+                status_text = f"Пробный период ({days_left} дней)"
+            elif license_type == 'premium':
+                self.license_type_label.setText("Премиум")
+                status_text = f"Премиум ({days_left} дней)"
+            else:
+                self.license_type_label.setText("Не активирована")
+                status_text = "Не активирована"
+
+            self.license_days_label.setText(str(days_left))
+
+            if is_valid:
+                self.license_status_label.setText(f"Статус: {status_text}")
+            else:
+                self.license_status_label.setText(f"Статус: {message}")
+
+            # Сохраняем состояние лицензии в настройках
+            self.settings.settings.setValue("license/is_licensed", self.is_licensed)
+            self.settings.settings.setValue("license/type", license_type)
+            self.settings.settings.setValue("license/days_left", days_left)
+            self.settings.settings.setValue("license/is_trial", is_trial)
+
+        except Exception as e:
+            print(f"Ошибка при обновлении статуса лицензии: {e}")
+
     def closeEvent(self, event):
-        """Обработка закрытия окна - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
+        """Обработка закрытия окна"""
         try:
             print("Сохранение состояния при закрытии приложения...")
 
@@ -1820,8 +1411,6 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'records_table'):
                 print("Сохранение состояния таблицы...")
                 self.records_table.save_state()
-            else:
-                print("Таблица records_table не найдена")
 
             # Сохраняем информацию о лицензии
             if hasattr(self, 'license_manager'):

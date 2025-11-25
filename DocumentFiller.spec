@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('version_config.json', '.'), ('repo_config.json', '.'), ('Шаблоны', 'Шаблоны')],
+    datas=[('repo_config.json', '.'), ('Шаблоны', 'Шаблоны')],
     hiddenimports=['email', 'email.mime', 'email.mime.text', 'email.mime.multipart', 'email.mime.base', 'email.encoders', 'email.utils', 'queue', 'collections', 'collections.abc'],
     hookspath=[],
     hooksconfig={},
