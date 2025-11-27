@@ -1037,12 +1037,19 @@ class MainWindow(QMainWindow):
                     # Доступно обновление
                     update_info = result
                     version = update_info.get('version', 'Новая версия')
+                    download_url = update_info.get('download_url', '')
+
+                    # ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА URL
+                    if not download_url.startswith('http'):
+                        QMessageBox.warning(self, "Ошибка",
+                                            f"Некорректный URL для скачивания: {download_url}")
+                        return
 
                     reply = QMessageBox.question(
                         self,
                         "Доступно обновление",
                         f"Доступна новая версия программы: {version}\n\n"
-                        f"Описание: {update_info.get('release_notes', 'Нет описания')}\n\n"
+                        f"URL: {download_url}\n\n"
                         "Установить обновление сейчас?",
                         QMessageBox.Yes | QMessageBox.No
                     )
@@ -1217,22 +1224,14 @@ class MainWindow(QMainWindow):
     def show_about(self):
         """Показать информацию о программе"""
         try:
-            # Получаем версию из repo_config.json
-            version = "1.0.0"
-            try:
-                config_path = os.path.join(self.get_script_dir(), 'repo_config.json')
-                if os.path.exists(config_path):
-                    with open(config_path, 'r', encoding='utf-8') as f:
-                        config_data = json.load(f)
-                        version = config_data.get('current_version', '1.0.0')
-            except:
-                pass
+            # Импортируем версию из version.py
+            from version import __version__
 
             QMessageBox.about(
                 self,
                 "О программе",
                 f"Программа заполнения согласий и личных карточек\n\n"
-                f"Версия: {version}\n\n"
+                f"Версия: {__version__}\n\n"
                 "Разработчик: Строчков Сергей Константинович\n"
                 "Телефон: 8(920)791-30-43\n"
                 "WhatsApp • Telegram"

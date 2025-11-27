@@ -1,23 +1,60 @@
-# build_complete.py - исправленная версия
+# build_complete.py - ИСПРАВЛЕННАЯ ВЕРСИЯ ДЛЯ MAIL.RU CLOUD
 import os
 import shutil
 import subprocess
 import sys
 import json
 from pathlib import Path
-import zipfile  # Добавляем импорт
+import zipfile
 
 
 def build_complete():
     print("🚀 Запуск сборки...")
 
-    # Загружаем версию из repo_config.json
-    version = load_version_from_config()
+    # Запрашиваем версию у пользователя
+    version = input("Введите версию для сборки (например 1.0.1): ").strip()
     if not version:
-        print("❌ Не удалось загрузить версию из repo_config.json")
+        print("❌ Версия не указана")
         return False
 
-    print(f"📋 Версия для сборки: {version}")
+    # Запрашиваем URL папки на Облаке Mail.ru
+    print("\n📝 Настройка обновлений:")
+    print("Укажите публичную ссылку на папку в Облаке Mail.ru")
+    print("Пример: https://cloud.mail.ru/public/49wa/SD8CijQJ5")
+    mail_ru_cloud_url = input("URL папки в Облаке Mail.ru: ").strip()
+
+    if not mail_ru_cloud_url:
+        print("⚠️ URL папки не указан - автообновления отключены")
+
+    # Обновляем версию в version.py
+    try:
+        version_content = f'# version.py - хранение версии в коде\n__version__ = "{version}"\n'
+        with open("version.py", "w", encoding="utf-8") as f:
+            f.write(version_content)
+        print(f"✅ Версия обновлена в version.py: {version}")
+    except Exception as e:
+        print(f"❌ Ошибка обновления version.py: {e}")
+        return False
+
+    # Обновляем repo_config.json
+    try:
+        config = {
+            "type": "mail_ru_cloud",
+            "mail_ru_cloud_url": mail_ru_cloud_url,
+            "current_version": version,
+            "online_license_db_url": ""
+        }
+
+        with open("repo_config.json", "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+        print(f"✅ Конфиг обновлен: версия={version}, папка={mail_ru_cloud_url}")
+    except Exception as e:
+        print(f"❌ Ошибка обновления repo_config.json: {e}")
+        return False
+
+    print(f"📋 Сборка версии: {version}")
+    if mail_ru_cloud_url:
+        print(f"📁 Папка для обновлений: {mail_ru_cloud_url}")
 
     # Проверяем существование папки с шаблонами
     templates_dir = "Шаблоны"
@@ -26,8 +63,8 @@ def build_complete():
         print("Создайте папку 'Шаблоны' с шаблонами документов перед сборкой.")
         return False
 
-    # Создаем правильный spec файл
-    spec_content = f'''# -*- mode: python ; coding: utf-8 -*-
+    # Создаем spec файл
+    spec_content = '''# -*- mode: python ; coding: utf-8 -*-
 
 import sys
 from PyInstaller.building.build_main import Analysis
@@ -41,11 +78,12 @@ a = Analysis(
     binaries=[],
     datas=[
         ('repo_config.json', '.'),
-        ('Шаблоны', 'Шаблоны')
+        ('Шаблоны', 'Шаблоны'),
+        ('version.py', '.')
     ],
     hiddenimports=[
         'main_window', 'settings', 'theme_manager', 
-        'license_manager', 'update_manager', 'widgets',
+        'license_manager', 'update_manager', 'widgets', 'version',
         'PyQt5', 'PyQt5.QtCore', 'PyQt5.QtGui', 'PyQt5.QtWidgets', 'PyQt5.QtNetwork',
         'PyQt5.sip',
         'openpyxl', 'docxtpl', 'jinja2', 'docx',
@@ -57,7 +95,7 @@ a = Analysis(
         'uuid', 'platform', 'threading', 'tempfile', 'zipfile',
     ],
     hookspath=[],
-    hooksconfig={{}},
+    hooksconfig={},
     runtime_hooks=[],
     excludes=[],
     win_no_prefer_redirects=False,
@@ -76,7 +114,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='DocumentFiller',  # Фиксированное имя для обновлений
+    name='DocumentFiller',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -113,30 +151,47 @@ exe = EXE(
 
         print("✅ Сборка завершена успешно!")
 
-        # Переименовываем EXE файл чтобы включить версию
-        original_exe = os.path.join('dist', 'DocumentFiller.exe')
-        versioned_exe = os.path.join('dist', f'DocumentFiller_v{version}.exe')
+        # Создаем понятные файлы для загрузки в Облако Mail.ru
+        original_exe_dir = os.path.join('dist', 'DocumentFiller')
+        original_exe = os.path.join(original_exe_dir, 'DocumentFiller.exe')
 
         if os.path.exists(original_exe):
+            # Создаем файл с версией в названии для загрузки
+            versioned_exe_name = f'DocumentFiller_v{version}.exe'
+            versioned_exe = os.path.join(original_exe_dir, versioned_exe_name)
             shutil.copy2(original_exe, versioned_exe)
-            print(f"📦 Создан EXE с версией: {versioned_exe}")
+            print(f"📦 Создан EXE для загрузки: {versioned_exe_name}")
 
-        # Проверяем наличие шаблонов
-        templates_in_dist = os.path.join('dist', 'DocumentFiller', 'Шаблоны')
-        if os.path.exists(templates_in_dist):
-            print("✅ Шаблоны скопированы в папку dist")
+            # Также создаем ZIP архив для загрузки
+            zip_filename = f'DocumentFiller_v{version}.zip'
+            self_extracting_zip = create_self_extracting_zip(original_exe_dir, zip_filename, version)
+            print(f"📦 Создан самораспаковывающийся архив: {self_extracting_zip}")
 
-            # Показываем размер
-            total_size = 0
-            for root, dirs, files in os.walk('dist'):
-                for file in files:
-                    file_path = os.path.join(root, file)
-                    total_size += os.path.getsize(file_path)
+        # Проверяем результат
+        if os.path.exists(original_exe_dir):
+            print(f"📁 Содержимое папки dist/DocumentFiller:")
+            for item in os.listdir(original_exe_dir):
+                item_path = os.path.join(original_exe_dir, item)
+                if os.path.isfile(item_path):
+                    size = os.path.getsize(item_path) / (1024 * 1024)
+                    print(f"   📄 {item} ({size:.2f} МБ)")
+                else:
+                    item_count = len(os.listdir(item_path))
+                    print(f"   📂 {item}/ ({item_count} файлов)")
 
-            print(f"📊 Общий размер: {total_size / (1024 * 1024):.2f} МБ")
+            # Инструкция по загрузке в Облако Mail.ru
+            if mail_ru_cloud_url:
+                print(f"\n📋 ИНСТРУКЦИЯ ПО ЗАГРУЗКЕ В ОБЛАКО MAIL.RU:")
+                print(f"1. Откройте браузер и перейдите по ссылке: {mail_ru_cloud_url}")
+                print(f"2. Нажмите 'Загрузить' и выберите файлы:")
+                print(f"   - {versioned_exe_name}")
+                print(f"   - {zip_filename}")
+                print(f"3. Убедитесь, что файлы загрузились и видны в списке")
+                print(f"4. Теперь программа сможет автоматически находить обновления!")
+
             return True
         else:
-            print("❌ Шаблоны не скопированы в папку dist!")
+            print("❌ Папка с EXE не создана!")
             return False
 
     except subprocess.CalledProcessError as e:
@@ -151,99 +206,44 @@ exe = EXE(
         # Очищаем временные файлы
         clean_temp_files()
 
-def load_version_from_config():
-    """Загрузить версию из repo_config.json"""
+
+def create_self_extracting_zip(source_dir, zip_filename, version):
+    """Создать самораспаковывающийся ZIP архив"""
     try:
-        if os.path.exists("repo_config.json"):
-            with open("repo_config.json", "r", encoding="utf-8") as f:
-                config = json.load(f)
-                version = config.get("current_version", "1.0.0")
-                # Убедимся, что версия в правильном формате (без пробелов, специальных символов)
-                version = version.replace(' ', '_').replace('/', '_').replace('\\', '_')
-                return version
-        else:
-            # Создаем конфиг по умолчанию
-            default_config = {
-                "type": "yandex_disk",
-                "yandex_disk_url": "",
-                "current_version": "1.0.0",
-                "online_license_db_url": ""
-            }
-            with open("repo_config.json", "w", encoding="utf-8") as f:
-                json.dump(default_config, f, indent=2, ensure_ascii=False)
-            return "1.0.0"
+        # Создаем обычный ZIP архив
+        with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for root, dirs, files in os.walk(source_dir):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    arcname = os.path.relpath(file_path, source_dir)
+                    zipf.write(file_path, arcname)
+
+        print(f"✅ Создан ZIP архив: {zip_filename}")
+        return zip_filename
+
     except Exception as e:
-        print(f"❌ Ошибка загрузки версии: {e}")
-        return "1.0.0"
+        print(f"❌ Ошибка создания ZIP архива: {e}")
+        return None
 
 
 def clean_temp_files():
     """Очистка временных файлов"""
     try:
-        # Удаляем все spec файлы
-        for file in os.listdir('.'):
-            if file.startswith('document_filler_v') and file.endswith('.spec'):
-                os.remove(file)
-                print(f"🧹 Удален временный файл: {file}")
+        if os.path.exists('document_filler.spec'):
+            os.remove('document_filler.spec')
+            print("🧹 Удален временный файл: document_filler.spec")
 
-        # Удаляем временную папку сборки
-        build_temp_dir = 'build_temp'
-        if os.path.exists(build_temp_dir):
-            shutil.rmtree(build_temp_dir)
+        build_dir = 'build'
+        if os.path.exists(build_dir):
+            shutil.rmtree(build_dir)
             print("🧹 Временная папка сборки очищена")
     except Exception as e:
         print(f"⚠️ Не удалось очистить временные файлы: {e}")
 
 
-def create_release_zip():
-    """Создать ZIP архив с готовым приложением"""
-    try:
-        version = load_version_from_config()
-        dist_dir = 'dist'
-
-        if not os.path.exists(dist_dir):
-            print("❌ Папка dist не найдена!")
-            return False
-
-        exe_name = f'DocumentFiller_v{version}.exe'
-        exe_path = os.path.join(dist_dir, exe_name)
-
-        if not os.path.exists(exe_path):
-            print(f"❌ EXE файл {exe_name} не найден!")
-            return False
-
-        # Создаем ZIP архив
-        zip_filename = f'DocumentFiller_v{version}.zip'
-        print(f"🗜️ Создание ZIP архива: {zip_filename}")
-
-        with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            # Добавляем EXE файл
-            zipf.write(exe_path, exe_name)
-
-            # Добавляем папку Шаблоны
-            templates_dir = os.path.join(dist_dir, 'Шаблоны')
-            if os.path.exists(templates_dir):
-                for root, dirs, files in os.walk(templates_dir):
-                    for file in files:
-                        file_path = os.path.join(root, file)
-                        arcname = os.path.join('Шаблоны', os.path.relpath(file_path, templates_dir))
-                        zipf.write(file_path, arcname)
-
-            # Добавляем repo_config.json
-            if os.path.exists('repo_config.json'):
-                zipf.write('repo_config.json', 'repo_config.json')
-
-        print(f"✅ ZIP архив создан: {zip_filename}")
-        return True
-
-    except Exception as e:
-        print(f"❌ Ошибка создания ZIP архива: {e}")
-        return False
-
-
 if __name__ == "__main__":
-    # Проверяем необходимые файлы перед сборкой
-    required_files = ['main.py', 'main_window.py']
+    # Проверяем необходимые файлы
+    required_files = ['main.py', 'main_window.py', 'version.py']
     missing_files = []
 
     for file in required_files:
@@ -263,27 +263,18 @@ if __name__ == "__main__":
         print("Создайте папку 'Шаблоны' и добавьте туда шаблоны документов (.docx)")
         sys.exit(1)
 
-    # Проверяем наличие repo_config.json
-    if not os.path.exists("repo_config.json"):
-        print("⚠️  Файл repo_config.json не найден, создаем с настройками по умолчанию...")
-        load_version_from_config()  # Это создаст файл
-
     # Запускаем сборку
     success = build_complete()
 
     if success:
         print("\n🎉 Сборка успешно завершена!")
-        version = load_version_from_config()
-        print(f"📦 Имя EXE файла: DocumentFiller_v{version}.exe")
-        print("📍 Готовое приложение находится в папке 'dist'")
+        print("📍 Готовое приложение находится в папке 'dist/DocumentFiller'")
 
-        # Предлагаем создать ZIP архив
-        create_zip = input("\n🗜️  Создать ZIP архив для распространения? (y/n): ").lower().strip()
-        if create_zip in ['y', 'yes', 'д', 'да']:
-            if create_release_zip():
-                print("✅ ZIP архив создан и готов для распространения!")
-            else:
-                print("❌ Не удалось создать ZIP архив")
+        print("\n🔔 ВАЖНЫЕ ШАГИ ПОСЛЕ СБОРКИ:")
+        print("1. Загрузите созданные EXE и ZIP файлы в папку Облака Mail.ru")
+        print("2. Убедитесь, что папка публичная (доступ по ссылке)")
+        print("3. Запустите программу и проверьте обновления через меню 'Сервис' -> 'Проверить обновления'")
+        print("4. Убедитесь, что программа видит новую версию")
     else:
         print("\n💥 Сборка не удалась!")
         sys.exit(1)
