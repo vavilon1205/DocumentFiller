@@ -1,4 +1,4 @@
-# build_github.py - скрипт сборки для GitHub репозитория (ИСПРАВЛЕННАЯ ВЕРСИЯ)
+# build_github.py - ИСПРАВЛЕННАЯ ВЕРСИЯ ДЛЯ ПРАВИЛЬНОЙ ЗАГРУЗКИ ФАЙЛОВ
 import os
 import shutil
 import subprocess
@@ -151,31 +151,19 @@ exe = EXE(
         original_exe = os.path.join(original_exe_dir, 'DocumentFiller.exe')
 
         if os.path.exists(original_exe):
-            # Создаем EXE файл с версией в названии
+            # Создаем EXE файл с версией в названии (ОСНОВНОЙ ДЛЯ ОБНОВЛЕНИЙ)
             versioned_exe_name = f'DocumentFiller_v{version}.exe'
             versioned_exe = os.path.join('dist', versioned_exe_name)
             shutil.copy2(original_exe, versioned_exe)
             print(f"📦 Создан EXE для GitHub: {versioned_exe_name}")
-
-            # Также создаем копию с простым именем для удобства
-            simple_exe_name = 'DocumentFiller.exe'
-            simple_exe = os.path.join('dist', simple_exe_name)
-            shutil.copy2(original_exe, simple_exe)
-            print(f"📦 Создан EXE с простым именем: {simple_exe_name}")
 
             # Создаем ZIP архив с версией
             zip_filename = f'DocumentFiller_v{version}.zip'
             create_github_zip(original_exe_dir, zip_filename)
             print(f"📦 Создан ZIP архив: {zip_filename}")
 
-            # Создаем ZIP архив с простым именем
-            simple_zip_filename = 'DocumentFiller.zip'
-            simple_zip_path = os.path.join('dist', simple_zip_filename)
-            create_github_zip(original_exe_dir, simple_zip_filename)
-            print(f"📦 Создан ZIP архив с простым именем: {simple_zip_filename}")
-
             # Создаем инструкцию
-            create_github_instructions(version, versioned_exe_name, simple_exe_name, zip_filename, simple_zip_filename)
+            create_github_instructions(version, versioned_exe_name, zip_filename)
 
             # Создаем README для релиза
             create_release_readme(version)
@@ -212,7 +200,7 @@ exe = EXE(
 
 
 def create_github_zip(source_dir, zip_filename):
-    """Создать ZIP архив для GitHub с EXE в корне"""
+    """Создать ZIP архив для GitHub"""
     try:
         with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
             # Добавляем все файлы из source_dir в корень ZIP
@@ -234,10 +222,12 @@ def create_github_zip(source_dir, zip_filename):
         return False
 
 
-def create_github_instructions(version, versioned_exe_name, simple_exe_name, zip_name, simple_zip_name):
+def create_github_instructions(version, versioned_exe_name, zip_name):
     """Создать инструкцию по загрузке в GitHub Releases"""
     instructions = f"""
 📋 ИНСТРУКЦИЯ ПО ЗАГРУЗКЕ В GITHUB RELEASES:
+
+ВАЖНО: Для работы автоматических обновлений необходимо загрузить файлы в раздел "Assets" релиза!
 
 1. Перейдите на страницу репозитория: https://github.com/vavilon1205/DocumentFiller
 2. Нажмите "Create a new release" или выберите существующий релиз
@@ -246,19 +236,17 @@ def create_github_instructions(version, versioned_exe_name, simple_exe_name, zip
    - Title: DocumentFiller v{version}
    - Description: Скопируйте содержимое из файла RELEASE_v{version}.md
 
-4. Загрузите файлы из папки 'dist':
-   - {versioned_exe_name} (EXE с версией) - ОСНОВНОЙ ФАЙЛ ДЛЯ ОБНОВЛЕНИЙ
-   - {simple_exe_name} (EXE с простым именем)
-   - {zip_name} (ZIP архив с версией)
-   - {simple_zip_name} (ZIP архив с простым именем)
+4. ЗАГРУЗИТЕ ФАЙЛЫ В РАЗДЕЛ "ASSETS":
+   - Перетащите файлы из папки 'dist' в область "Attach binaries by dropping them here or selecting them"
+   - Обязательно загрузите: {versioned_exe_name} (ОСНОВНОЙ ФАЙЛ ДЛЯ ОБНОВЛЕНИЙ)
+   - Также можно загрузить: {zip_name} (ZIP архив)
 
 5. Опубликуйте релиз
 
 6. После публикации программа сможет автоматически находить обновления!
 
-🔗 Ссылки для скачивания:
-- EXE с версией: https://github.com/vavilon1205/DocumentFiller/releases/latest/download/{versioned_exe_name}
-- Простой EXE: https://github.com/vavilon1205/DocumentFiller/releases/latest/download/{simple_exe_name}
+🔗 Ссылка для скачивания будет: 
+https://github.com/vavilon1205/DocumentFiller/releases/latest/download/{versioned_exe_name}
 
 ⚙️ Конфигурация обновлений:
 - Репозиторий: https://github.com/vavilon1205/DocumentFiller
@@ -267,8 +255,7 @@ def create_github_instructions(version, versioned_exe_name, simple_exe_name, zip
 
 💡 Рекомендации:
 - Файл {versioned_exe_name} используется для автоматических обновлений
-- Файл {simple_exe_name} удобен для первой установки
-- ZIP архивы содержат все необходимые файлы программы
+- Убедитесь, что файлы загружены в раздел "Assets" (должны отображаться в списке файлов релиза)
 """
 
     instructions_file = "github_release_instructions.txt"
@@ -295,9 +282,8 @@ def create_release_readme(version):
 - 100 МБ свободного места на диске
 
 ### Установка:
-1. Скачайте `DocumentFiller.exe` для простой установки
-2. Или скачайте `DocumentFiller_v{version}.exe` для версионной установки
-3. Запустите EXE файл
+1. Скачайте `DocumentFiller_v{version}.exe` из раздела Assets
+2. Запустите EXE файл
 
 ### Обновление:
 Программа автоматически проверяет обновления при запуске.
@@ -340,11 +326,12 @@ def clean_temp_files():
         print(f"⚠️ Не удалось очистить временные файлы: {e}")
 
 
-def check_environment():
-    """Проверить окружение перед сборкой"""
-    print("🔍 Проверка окружения...")
+if __name__ == "__main__":
+    print("=" * 60)
+    print("        СБОРКА DocumentFiller ДЛЯ GITHUB")
+    print("=" * 60)
 
-    # Проверяем необходимые файлы
+    # Проверяем окружение
     required_files = ['main.py', 'main_window.py', 'version.py', 'update_manager.py']
     missing_files = []
 
@@ -357,44 +344,12 @@ def check_environment():
         for file in missing_files:
             print(f"   - {file}")
         print("Убедитесь, что все файлы находятся в текущей папке.")
-        return False
+        sys.exit(1)
 
     # Проверяем наличие папки Шаблоны
     if not os.path.exists("Шаблоны"):
         print("❌ Папка 'Шаблоны' не найдена!")
         print("Создайте папку 'Шаблоны' и добавьте туда шаблоны документов (.docx)")
-        return False
-
-    # Проверяем шаблоны
-    template_files = [f for f in os.listdir("Шаблоны") if f.endswith('.docx')]
-    if not template_files:
-        print("⚠️ В папке 'Шаблоны' не найдены .docx файлы")
-        print("Добавьте шаблоны документов для работы программы")
-    else:
-        print(f"✅ Найдено шаблонов: {len(template_files)}")
-
-    # Проверяем Python модули
-    try:
-        import PyQt5
-        import openpyxl
-        import docxtpl
-        import requests
-        print("✅ Все необходимые модули установлены")
-    except ImportError as e:
-        print(f"❌ Отсутствует модуль: {e}")
-        print("Установите необходимые модули: pip install -r requirements.txt")
-        return False
-
-    return True
-
-
-if __name__ == "__main__":
-    print("=" * 60)
-    print("        СБОРКА DocumentFiller ДЛЯ GITHUB")
-    print("=" * 60)
-
-    # Проверяем окружение
-    if not check_environment():
         sys.exit(1)
 
     # Запускаем сборку
@@ -404,11 +359,12 @@ if __name__ == "__main__":
         print("\n" + "=" * 60)
         print("✅ Сборка для GitHub успешно завершена!")
         print("📍 Готовые файлы находятся в папке 'dist'")
-        print("\n📤 ДАЛЬНЕЙШИЕ ДЕЙСТВИЯ:")
-        print("1. Загрузите файлы из папки 'dist' в GitHub Releases")
-        print("2. Следуйте инструкции в файле 'github_release_instructions.txt'")
-        print("3. Используйте 'RELEASE_vX.X.X.md' как описание релиза")
-        print("\n🔔 Программа теперь будет автоматически проверять обновления из GitHub!")
+        print("\n📤 ВАЖНЫЕ ДЕЙСТВИЯ:")
+        print("1. Загрузите файлы из папки 'dist' в раздел ASSETS GitHub Releases")
+        print("2. Убедитесь, что файлы отображаются в списке файлов релиза")
+        print("3. Следуйте инструкции в файле 'github_release_instructions.txt'")
+        print("4. Используйте 'RELEASE_v{version}.md' как описание релиза")
+        print("\n🔔 После загрузки файлов в Assets программа сможет находить обновления!")
         print("=" * 60)
     else:
         print("\n💥 Сборка не удалась!")
