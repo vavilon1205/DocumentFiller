@@ -1,4 +1,4 @@
-# update_manager.py - ИСПРАВЛЕННАЯ ВЕРСИЯ С ПРАВИЛЬНЫМ СКАЧИВАНИЕМ
+# update_manager.py - ОБНОВЛЕННАЯ ВЕРСИЯ ДЛЯ GITHUB РЕПОЗИТОРИЯ
 import os
 import sys
 import json
@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 from datetime import datetime
 import urllib.parse
+import zipfile
 
 
 class UpdateManager:
@@ -45,10 +46,12 @@ class UpdateManager:
         try:
             config_path = os.path.join(self.script_dir, "repo_config.json")
             if not os.path.exists(config_path):
+                # Конфиг по умолчанию для GitHub
                 default_config = {
-                    "type": "mail_ru_cloud",
-                    "mail_ru_cloud_url": "",
+                    "type": "github",
+                    "github_repo": "https://github.com/vavilon1205/DocumentFiller",
                     "current_version": "1.0.0",
+                    "update_url": "https://github.com/vavilon1205/DocumentFiller/releases/latest",
                     "online_license_db_url": ""
                 }
                 with open(config_path, "w", encoding="utf-8") as f:
@@ -76,301 +79,90 @@ class UpdateManager:
             return "1.0.0"
 
     def check_for_updates(self):
-        """Проверка обновлений"""
+        """Проверка обновлений через GitHub"""
         try:
-            mail_ru_url = self.config.get("mail_ru_cloud_url", "").strip()
-            if not mail_ru_url:
-                return False, "Не указана ссылка на папку в Облаке Mail.ru"
+            github_repo = self.config.get("github_repo", "").strip()
+            if not github_repo:
+                return False, "Не указан GitHub репозиторий"
 
-            print(f"🔍 Проверка обновлений в Облаке Mail.ru: {mail_ru_url}")
+            print(f"🔍 Проверка обновлений в GitHub: {github_repo}")
 
-            # Получаем HTML страницу
-            html_content = self.get_mail_ru_cloud_folder_html(mail_ru_url)
-            if not html_content:
-                return False, "Не удалось получить содержимое папки Облака Mail.ru"
+            # Извлекаем владельца и имя репозитория из URL
+            repo_parts = github_repo.rstrip('/').split('/')
+            if len(repo_parts) < 2:
+                return False, "Неверный формат URL репозитория"
 
-            print(f"📄 Получено HTML содержимое, длина: {len(html_content)} симвонов")
+            owner = repo_parts[-2]
+            repo = repo_parts[-1]
 
-            # Ищем все EXE файлы в HTML
-            exe_files = self.find_exe_files_in_mail_ru_html(html_content, mail_ru_url)
-            print(f"📁 Найдено EXE файлов: {len(exe_files)}")
+            # Получаем информацию о последнем релизе через GitHub API
+            api_url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
 
-            for file_name, file_url in exe_files:
-                print(f"   - {file_name} -> {file_url}")
+            headers = {
+                'User-Agent': 'DocumentFiller-Updater/1.0',
+                'Accept': 'application/vnd.github.v3+json'
+            }
 
-            if not exe_files:
-                return False, "В папке не найдены EXE файлы"
+            response = requests.get(api_url, headers=headers, timeout=10)
 
-            # Извлекаем версии из имен файлов
-            version_files = []
-            for file_name, file_url in exe_files:
-                version = self.extract_version_from_filename(file_name)
-                if version:
-                    version_files.append({
-                        'version': version,
-                        'file_name': file_name,
-                        'download_url': file_url
-                    })
-                    print(f"✅ Файл с версией: {file_name} -> версия {version}")
+            if response.status_code == 404:
+                return False, "Релизы не найдены или репозиторий не существует"
+            elif response.status_code != 200:
+                return False, f"Ошибка GitHub API: {response.status_code}"
 
-            if not version_files:
-                return False, "Не найдены файлы с версиями в названии"
+            release_info = response.json()
+            latest_version = release_info['tag_name'].lstrip('v')  # Убираем 'v' из тега
 
-            # Находим самую новую версию
-            latest_version_info = self.find_latest_version(version_files)
-
-            if not latest_version_info:
-                return False, "Не удалось определить последнюю версию"
-
-            latest_version = latest_version_info['version']
-            download_url = latest_version_info['download_url']
-
-            print(f"📋 Самая новая версия: {latest_version}, текущая: {self.current_version}")
+            print(f"📋 Последняя версия на GitHub: {latest_version}, текущая: {self.current_version}")
 
             if self.is_newer_version(latest_version, self.current_version):
+                # Ищем EXE файл в ассетах
+                exe_asset = None
+                for asset in release_info.get('assets', []):
+                    if asset['name'].endswith('.exe') and 'DocumentFiller' in asset['name']:
+                        exe_asset = asset
+                        break
+
+                if not exe_asset:
+                    return False, "В релизе не найден EXE файл"
+
                 info = {
                     "version": latest_version,
-                    "download_url": download_url,
-                    "update_type": "mail_ru_cloud",
-                    "release_notes": f"Доступна новая версия {latest_version}"
+                    "download_url": exe_asset['browser_download_url'],
+                    "release_notes": release_info.get('body', ''),
+                    "release_name": release_info.get('name', ''),
+                    "update_type": "github",
+                    "asset_name": exe_asset['name']
                 }
                 return True, info
             else:
                 return True, "up_to_date"
 
+        except requests.exceptions.RequestException as e:
+            return False, f"Ошибка сети: {str(e)}"
         except Exception as e:
-            return False, f"Ошибка проверки обновлений: {str(e)}"
+            return False, f"Ошибка проверки обновлений GitHub: {str(e)}"
 
-    def get_mail_ru_cloud_folder_html(self, folder_url):
-        """Получить HTML содержимое папки Облака Mail.ru"""
-        try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'ru-RU,ru;q=0.8,en-US;q=0.5,en;q=0.3',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1',
-            }
-
-            response = requests.get(folder_url, headers=headers, timeout=30)
-            response.raise_for_status()
-
-            return response.text
-        except Exception as e:
-            print(f"Ошибка получения HTML папки Облака Mail.ru: {e}")
-            return None
-
-    def find_exe_files_in_mail_ru_html(self, html_content, base_url):
-        """Найти EXE файлы в HTML Облака Mail.ru - УЛУЧШЕННАЯ ВЕРСИЯ"""
-        exe_files = []
-
-        try:
-            # Используем BeautifulSoup если установлен
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(html_content, 'html.parser')
-
-            # Ищем все ссылки на EXE файлы
-            for link in soup.find_all('a', href=True):
-                href = link.get('href', '')
-                if href and '.exe' in href.lower():
-                    file_url = self.normalize_file_url(href, base_url)
-                    file_name = os.path.basename(urllib.parse.urlparse(file_url).path)
-
-                    if 'documentfiller' in file_name.lower():
-                        exe_files.append((file_name, file_url))
-                        print(f"✅ Найден EXE файл: {file_name} -> {file_url}")
-
-        except ImportError:
-            print("⚠️ BeautifulSoup не установлен, используем базовый парсинг")
-            # Базовый парсинг regex
-            patterns = [
-                r'href="([^"]*\.exe[^"]*)"',
-                r"href='([^']*\.exe[^']*)'",
-            ]
-
-            for pattern in patterns:
-                matches = re.findall(pattern, html_content, re.IGNORECASE)
-                for match in matches:
-                    if 'documentfiller' in match.lower():
-                        file_url = self.normalize_file_url(match, base_url)
-                        file_name = os.path.basename(urllib.parse.urlparse(file_url).path)
-                        exe_files.append((file_name, file_url))
-                        print(f"✅ Найден EXE (regex): {file_name} -> {file_url}")
-
-        # Убираем дубликаты
-        unique_files = []
-        seen_urls = set()
-
-        for file_name, file_url in exe_files:
-            if file_url not in seen_urls:
-                unique_files.append((file_name, file_url))
-                seen_urls.add(file_url)
-
-        return unique_files
-
-    def normalize_file_url(self, file_url, base_url):
-        """Нормализовать URL файла"""
-        try:
-            # Если URL уже абсолютный, возвращаем как есть
-            if file_url.startswith('http://') or file_url.startswith('https://'):
-                return file_url
-
-            # Если URL начинается с //
-            if file_url.startswith('//'):
-                return 'https:' + file_url
-
-            # Если URL начинается с / (абсолютный путь на домене)
-            if file_url.startswith('/'):
-                return 'https://cloud.mail.ru' + file_url
-
-            # Если URL относительный (начинается с ./ или просто имя файла)
-            parsed_base = urllib.parse.urlparse(base_url)
-            base_path = parsed_base.path
-
-            # Убеждаемся, что base_path заканчивается на /
-            if not base_path.endswith('/'):
-                base_path += '/'
-
-            # Убираем ./ из начала если есть
-            if file_url.startswith('./'):
-                file_url = file_url[2:]
-
-            # Собираем полный URL
-            full_url = f"https://{parsed_base.netloc}{base_path}{file_url}"
-
-            print(f"🔗 Нормализован URL: {file_url} -> {full_url}")
-            return full_url
-
-        except Exception as e:
-            print(f"❌ Ошибка нормализации URL {file_url}: {e}")
-            return file_url
-
-    def extract_version_from_filename(self, filename):
-        """Извлечь версию из имени файла"""
-        try:
-            patterns = [
-                r'DocumentFiller[_-]v?(\d+\.\d+\.\d+)\.exe',
-                r'DocumentFiller[_-]v?(\d+\.\d+)\.exe',
-                r'DocumentFiller[_-]v?(\d+)\.exe',
-                r'v?(\d+\.\d+\.\d+)\.exe',
-                r'v?(\d+\.\d+)\.exe',
-                r'v?(\d+)\.exe'
-            ]
-
-            for pattern in patterns:
-                match = re.search(pattern, filename, re.IGNORECASE)
-                if match:
-                    return match.group(1)
-
-            return None
-        except:
-            return None
-
-    def find_latest_version(self, version_files):
-        """Найти самую новую версию из списка"""
-        if not version_files:
-            return None
-
-        latest = version_files[0]
-
-        for file_info in version_files[1:]:
-            if self.is_newer_version(file_info['version'], latest['version']):
-                latest = file_info
-
-        return latest
-
-    def is_newer_version(self, latest, current):
-        """Сравнение версий"""
-        try:
-            def parse_version(version_str):
-                parts = []
-                for part in version_str.split('.'):
-                    if part.isdigit():
-                        parts.append(int(part))
-                    else:
-                        parts.append(0)
-                return parts
-
-            latest_parts = parse_version(latest)
-            current_parts = parse_version(current)
-
-            for i in range(max(len(latest_parts), len(current_parts))):
-                lv = latest_parts[i] if i < len(latest_parts) else 0
-                cv = current_parts[i] if i < len(current_parts) else 0
-                if lv > cv:
-                    return True
-                if lv < cv:
-                    return False
-            return False
-        except:
-            return latest != current
-
-    def download_from_mail_ru_cloud(self, url):
-        """Скачать из Облака Mail.ru - ПОЛНОСТЬЮ ПЕРЕРАБОТАННАЯ ВЕРСИЯ"""
+    def download_from_github(self, url, asset_name):
+        """Скачать обновление с GitHub"""
         try:
             temp_dir = tempfile.mkdtemp()
-            file_name = os.path.basename(urllib.parse.urlparse(url).path)
+            file_name = asset_name
             file_path = os.path.join(temp_dir, file_name)
 
-            print(f"📥 Скачивание обновления: {url}")
+            print(f"📥 Скачивание с GitHub: {url}")
             print(f"📁 Временный путь: {file_path}")
 
-            # Создаем сессию для сохранения cookies
-            session = requests.Session()
-
-            # Улучшенные заголовки для имитации браузера
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-                'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1',
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'none',
-                'Cache-Control': 'max-age=0',
-                'Referer': 'https://cloud.mail.ru/'
+                'User-Agent': 'DocumentFiller-Updater/1.0',
+                'Accept': 'application/octet-stream'
             }
 
-            print("🔍 Отправка запроса...")
-
-            # Отправляем запрос с обработкой редиректов
-            response = session.get(url, headers=headers, stream=True, timeout=60, allow_redirects=True)
+            response = requests.get(url, headers=headers, stream=True, timeout=30)
             response.raise_for_status()
-
-            # Проверяем content-type
-            content_type = response.headers.get('content-type', '').lower()
-            print(f"📄 Content-Type: {content_type}")
-
-            # Проверяем, что это не HTML страница
-            if 'text/html' in content_type:
-                # Сохраняем HTML для отладки
-                debug_path = file_path + '.html'
-                with open(debug_path, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        f.write(chunk)
-
-                print(f"⚠️ Скачана HTML страница вместо EXE. Сохранено в: {debug_path}")
-
-                # Попробуем найти прямую ссылку на скачивание в HTML
-                html_content = response.text
-                direct_links = re.findall(r'https?://[^"\']*\.exe[^"\']*', html_content)
-
-                if direct_links:
-                    print(f"🔍 Найдены прямые ссылки в HTML: {direct_links}")
-                    # Попробуем первую найденную ссылку
-                    direct_url = direct_links[0]
-                    print(f"🔄 Пробуем скачать по прямой ссылке: {direct_url}")
-                    return self.download_from_mail_ru_cloud(direct_url)
-                else:
-                    return False, "Скачана HTML страница вместо EXE файла. Возможно, требуется авторизация."
 
             total_size = int(response.headers.get('content-length', 0))
             downloaded_size = 0
-
-            print(f"💾 Размер файла: {total_size} байт")
 
             with open(file_path, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
@@ -384,24 +176,18 @@ class UpdateManager:
 
             print()
 
-            # Проверяем размер файла
+            # Проверяем файл
             file_size = os.path.getsize(file_path)
-            print(f"📊 Фактический размер файла: {file_size} байт")
+            print(f"📊 Размер скачанного файла: {file_size} байт")
 
-            if file_size < 2 * 1024 * 1024:  # Минимум 2 МБ для EXE
-                # Проверяем, не HTML ли это
-                with open(file_path, 'rb') as f:
-                    first_bytes = f.read(100)
-                    if b'<html' in first_bytes.lower() or b'<!doctype' in first_bytes.lower():
-                        return False, f"Скачан HTML файл вместо EXE. Размер: {file_size} байт"
+            if not self.is_valid_exe_file(file_path):
+                return False, "Скачанный файл не является корректным EXE"
 
-                return False, f"Файл слишком мал для EXE: {file_size} байт (ожидается >2 МБ)"
-
-            print(f"✅ Файл успешно скачан: {file_path} ({file_size} байт)")
+            print(f"✅ Файл успешно скачан: {file_path}")
             return True, file_path
 
         except Exception as e:
-            return False, f"Ошибка скачивания: {e}"
+            return False, f"Ошибка скачивания с GitHub: {str(e)}"
 
     def install_update(self, update_info):
         """Установить обновление"""
@@ -413,12 +199,14 @@ class UpdateManager:
                 print("⚠️ Предупреждение: не удалось создать резервную копию")
 
             download_url = update_info.get("download_url")
+            asset_name = update_info.get("asset_name", "DocumentFiller.exe")
+
             if not download_url:
                 return False, "Не указана ссылка для скачивания"
 
-            print("📥 Скачивание обновления из Облака Mail.ru...")
+            print(f"📥 Скачивание обновления из GitHub...")
 
-            success, result = self.download_from_mail_ru_cloud(download_url)
+            success, result = self.download_from_github(download_url, asset_name)
             if not success:
                 return False, result
 
@@ -426,10 +214,6 @@ class UpdateManager:
 
             if not os.path.exists(downloaded_file):
                 return False, "Файл не был скачан"
-
-            # Проверяем, что файл действительно EXE
-            if not self.is_valid_exe_file(downloaded_file):
-                return False, "Скачанный файл не является корректным EXE файлом"
 
             bat_content = self.create_update_bat_script(downloaded_file)
 
@@ -564,10 +348,36 @@ del /q "%~f0" >nul 2>&1
         except Exception as e:
             return False, f"Ошибка обновления: {e}"
 
+    def is_newer_version(self, latest, current):
+        """Сравнение версий"""
+        try:
+            def parse_version(version_str):
+                parts = []
+                for part in version_str.split('.'):
+                    if part.isdigit():
+                        parts.append(int(part))
+                    else:
+                        parts.append(0)
+                return parts
+
+            latest_parts = parse_version(latest)
+            current_parts = parse_version(current)
+
+            for i in range(max(len(latest_parts), len(current_parts))):
+                lv = latest_parts[i] if i < len(latest_parts) else 0
+                cv = current_parts[i] if i < len(current_parts) else 0
+                if lv > cv:
+                    return True
+                if lv < cv:
+                    return False
+            return False
+        except:
+            return latest != current
+
     def get_update_info(self):
         """Получить информацию о настройках обновлений"""
         return {
-            "type": self.config.get("type", "mail_ru_cloud"),
-            "mail_ru_cloud_url": self.config.get("mail_ru_cloud_url", ""),
+            "type": self.config.get("type", "github"),
+            "github_repo": self.config.get("github_repo", ""),
             "current_version": self.current_version
         }

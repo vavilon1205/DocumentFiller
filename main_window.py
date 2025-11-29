@@ -1,4 +1,4 @@
-# main_window.py - главное окно приложения (полная исправленная версия)
+# main_window.py - главное окно приложения (исправленная версия с правильными отступами)
 import os
 import sys
 import re
@@ -1094,7 +1094,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка", f"Ошибка при установке обновления:\n{str(e)}")
 
     def perform_update_installation(self, update_info, progress_dialog):
-        """Выполнить установку обновления"""
+        """Выполнить установку обновления - ИСПРАВЛЕННЫЕ ОТСТУПЫ"""
         try:
             success, message = self.update_manager.download_and_install_update(update_info)
             progress_dialog.close()
@@ -1232,7 +1232,7 @@ class MainWindow(QMainWindow):
                 "О программе",
                 f"Программа заполнения согласий и личных карточек\n\n"
                 f"Версия: {__version__}\n\n"
-                "Разработчик: Строчков Сергей Константинович\n"
+                "Разработчик: ССССтрочков Сергей Константинович\n"
                 "Телефон: 8(920)791-30-43\n"
                 "WhatsApp • Telegram"
             )
