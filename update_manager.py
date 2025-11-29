@@ -1,4 +1,4 @@
-# update_manager.py - ИСПРАВЛЕННАЯ ВЕРСИЯ ДЛЯ GITHUB РЕПОЗИТОРИЯ
+# update_manager.py - ИСПРАВЛЕННАЯ ВЕРСИЯ С ПРАВИЛЬНЫМ СРАВНЕНИЕМ ВЕРСИЙ
 import os
 import sys
 import json
@@ -86,6 +86,7 @@ class UpdateManager:
                 return False, "Не указан GitHub репозиторий"
 
             print(f"🔍 Проверка обновлений в GitHub: {github_repo}")
+            print(f"🔍 Текущая версия программы: {self.current_version}")
 
             # Извлекаем владельца и имя репозитория из URL
             repo_parts = github_repo.rstrip('/').split('/')
@@ -103,24 +104,42 @@ class UpdateManager:
                 'Accept': 'application/vnd.github.v3+json'
             }
 
+            print(f"🔗 Запрос к GitHub API: {api_url}")
             response = requests.get(api_url, headers=headers, timeout=10)
 
             if response.status_code == 404:
                 return False, "Релизы не найдены или репозиторий не существует"
             elif response.status_code != 200:
-                return False, f"Ошибка GitHub API: {response.status_code}"
+                return False, f"Ошибка GitHub API: {response.status_code} - {response.text}"
 
             release_info = response.json()
-            latest_version = release_info['tag_name'].lstrip('v')  # Убираем 'v' из тега
 
-            print(f"📋 Последняя версия на GitHub: {latest_version}, текущая: {self.current_version}")
+            # Извлекаем версию из тега
+            tag_name = release_info['tag_name']
+            print(f"🔍 Тег релиза: {tag_name}")
 
+            # Пробуем разные способы извлечения версии
+            latest_version = self.extract_version_from_tag(tag_name)
+
+            if not latest_version:
+                return False, f"Не удалось извлечь версию из тега: {tag_name}"
+
+            print(f"📋 Извлеченная версия: {latest_version}")
+            print(f"📋 Текущая версия: {self.current_version}")
+
+            # Сравниваем версии
             if self.is_newer_version(latest_version, self.current_version):
+                print(f"🎉 Найдена новая версия: {latest_version} > {self.current_version}")
+
                 # Ищем EXE файл в ассетах - РАСШИРЕННЫЙ ПОИСК
                 exe_asset = None
                 assets = release_info.get('assets', [])
 
                 print(f"📦 Найдено ассетов в релизе: {len(assets)}")
+
+                # Выводим список всех ассетов для отладки
+                for i, asset in enumerate(assets):
+                    print(f"   {i + 1}. {asset['name']} ({asset.get('size', 0)} bytes)")
 
                 # Приоритеты поиска EXE файлов
                 search_patterns = [
@@ -162,16 +181,42 @@ class UpdateManager:
                     "release_notes": release_info.get('body', ''),
                     "release_name": release_info.get('name', ''),
                     "update_type": "github",
-                    "asset_name": exe_asset['name']
+                    "asset_name": exe_asset['name'],
+                    "tag_name": tag_name
                 }
                 return True, info
             else:
+                print(f"ℹ️ Установлена последняя версия: {self.current_version}")
                 return True, "up_to_date"
 
         except requests.exceptions.RequestException as e:
             return False, f"Ошибка сети: {str(e)}"
         except Exception as e:
             return False, f"Ошибка проверки обновлений GitHub: {str(e)}"
+
+    def extract_version_from_tag(self, tag):
+        """Извлечь версию из тега GitHub"""
+        try:
+            # Удаляем префикс 'v' если есть
+            clean_tag = tag.lstrip('vV')
+
+            # Пробуем разные паттерны для извлечения версии
+            patterns = [
+                r'(\d+\.\d+\.\d+)',  # 1.0.31
+                r'(\d+\.\d+)',  # 1.0
+                r'(\d+)'  # 1
+            ]
+
+            for pattern in patterns:
+                match = re.search(pattern, clean_tag)
+                if match:
+                    return match.group(1)
+
+            # Если ничего не нашли, возвращаем очищенный тег
+            return clean_tag
+        except Exception as e:
+            print(f"❌ Ошибка извлечения версии из тега '{tag}': {e}")
+            return None
 
     def handle_zip_update(self, zip_asset, version):
         """Обработать обновление из ZIP архива"""
@@ -246,7 +291,11 @@ class UpdateManager:
 
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 # Ищем EXE файлы в архиве
-                exe_files = [f for f in zip_ref.namelist() if f.endswith('.exe')]
+                exe_files = [f for f in zip_ref.namelist() if f.endswith('.exe') and 'documentfiller' in f.lower()]
+
+                # Если не нашли по имени, берем первый EXE
+                if not exe_files:
+                    exe_files = [f for f in zip_ref.namelist() if f.endswith('.exe')]
 
                 if not exe_files:
                     return False, "В ZIP архиве не найдены EXE файлы"
@@ -383,7 +432,7 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-echo [6/7] Проверка нового EXE...
+echo [6/7] Проверка нового EXЕ...
 if not exist "{os.path.join(self.script_dir, self.exe_name)}" (
     echo ОШИБКА: Новый EXE не создан!
     pause
@@ -444,30 +493,72 @@ del /q "%~f0" >nul 2>&1
             return False, f"Ошибка обновления: {e}"
 
     def is_newer_version(self, latest, current):
-        """Сравнение версий"""
+        """Сравнение версий - УЛУЧШЕННАЯ ВЕРСИЯ"""
         try:
-            def parse_version(version_str):
-                parts = []
-                for part in version_str.split('.'):
-                    if part.isdigit():
-                        parts.append(int(part))
-                    else:
-                        parts.append(0)
-                return parts
+            print(f"🔍 Сравнение версий: '{latest}' vs '{current}'")
 
-            latest_parts = parse_version(latest)
-            current_parts = parse_version(current)
+            # Нормализуем версии
+            latest_normalized = self.normalize_version(latest)
+            current_normalized = self.normalize_version(current)
 
-            for i in range(max(len(latest_parts), len(current_parts))):
-                lv = latest_parts[i] if i < len(latest_parts) else 0
-                cv = current_parts[i] if i < len(current_parts) else 0
-                if lv > cv:
+            print(f"🔍 Нормализованные версии: '{latest_normalized}' vs '{current_normalized}'")
+
+            # Разбиваем на части
+            latest_parts = latest_normalized.split('.')
+            current_parts = current_normalized.split('.')
+
+            # Дополняем нулями до одинаковой длины
+            max_len = max(len(latest_parts), len(current_parts))
+            latest_parts.extend(['0'] * (max_len - len(latest_parts)))
+            current_parts.extend(['0'] * (max_len - len(current_parts)))
+
+            print(f"🔍 Части версий: latest={latest_parts}, current={current_parts}")
+
+            # Сравниваем каждую часть
+            for i in range(max_len):
+                latest_num = int(latest_parts[i])
+                current_num = int(current_parts[i])
+
+                if latest_num > current_num:
+                    print(f"🔍 Версия {latest} НОВЕЕ чем {current}")
                     return True
-                if lv < cv:
+                elif latest_num < current_num:
+                    print(f"🔍 Версия {latest} СТАРШЕ чем {current}")
                     return False
+
+            # Если все части равны
+            print(f"🔍 Версии {latest} и {current} РАВНЫ")
             return False
-        except:
-            return latest != current
+
+        except Exception as e:
+            print(f"❌ Ошибка сравнения версий: {e}")
+            # В случае ошибки сравниваем как строки
+            return latest > current
+
+    def normalize_version(self, version):
+        """Нормализовать версию для сравнения"""
+        # Удаляем все нецифровые символы, кроме точек
+        cleaned = re.sub(r'[^\d.]', '', version)
+
+        # Убеждаемся, что версия начинается с цифры
+        if not cleaned:
+            return "0"
+
+        # Удаляем ведущие нули из каждой части
+        parts = cleaned.split('.')
+        normalized_parts = []
+
+        for part in parts:
+            if part:  # Если часть не пустая
+                # Удаляем ведущие нули
+                normalized_part = part.lstrip('0')
+                if not normalized_part:  # Если после удаления нулей ничего не осталось
+                    normalized_part = '0'
+                normalized_parts.append(normalized_part)
+            else:
+                normalized_parts.append('0')
+
+        return '.'.join(normalized_parts)
 
     def get_update_info(self):
         """Получить информацию о настройках обновлений"""
