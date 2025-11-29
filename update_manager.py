@@ -1,4 +1,4 @@
-# update_manager.py - ОБНОВЛЕННАЯ ВЕРСИЯ ДЛЯ GITHUB РЕПОЗИТОРИЯ
+# update_manager.py - ИСПРАВЛЕННАЯ ВЕРСИЯ ДЛЯ GITHUB РЕПОЗИТОРИЯ
 import os
 import sys
 import json
@@ -27,7 +27,7 @@ class UpdateManager:
     def find_exe_name(self):
         """Автоматически найти имя EXE файла в директории"""
         exe_files = [f for f in os.listdir(self.script_dir)
-                     if f.endswith('.exe') and f.startswith('DocumentFiller')]
+                     if f.endswith('.exe') and 'DocumentFiller' in f]
 
         if exe_files:
             return exe_files[0]
@@ -116,15 +116,45 @@ class UpdateManager:
             print(f"📋 Последняя версия на GitHub: {latest_version}, текущая: {self.current_version}")
 
             if self.is_newer_version(latest_version, self.current_version):
-                # Ищем EXE файл в ассетах
+                # Ищем EXE файл в ассетах - РАСШИРЕННЫЙ ПОИСК
                 exe_asset = None
-                for asset in release_info.get('assets', []):
-                    if asset['name'].endswith('.exe') and 'DocumentFiller' in asset['name']:
-                        exe_asset = asset
+                assets = release_info.get('assets', [])
+
+                print(f"📦 Найдено ассетов в релизе: {len(assets)}")
+
+                # Приоритеты поиска EXE файлов
+                search_patterns = [
+                    lambda name: name.endswith('.exe') and 'documentfiller' in name.lower(),
+                    lambda name: name.endswith('.exe') and 'document' in name.lower(),
+                    lambda name: name.endswith('.exe') and 'filler' in name.lower(),
+                    lambda name: name.endswith('.exe') and 'setup' in name.lower(),
+                    lambda name: name.endswith('.exe') and 'install' in name.lower(),
+                    lambda name: name.endswith('.exe')  # Любой EXE файл
+                ]
+
+                for pattern in search_patterns:
+                    for asset in assets:
+                        if pattern(asset['name'].lower()):
+                            exe_asset = asset
+                            print(f"✅ Найден подходящий EXE: {asset['name']}")
+                            break
+                    if exe_asset:
                         break
 
                 if not exe_asset:
-                    return False, "В релизе не найден EXE файл"
+                    # Если EXE не найден, ищем ZIP архив
+                    zip_asset = None
+                    for asset in assets:
+                        if asset['name'].endswith('.zip') and 'documentfiller' in asset['name'].lower():
+                            zip_asset = asset
+                            print(f"✅ Найден ZIP архив: {asset['name']}")
+                            break
+
+                    if zip_asset:
+                        # Скачиваем и извлекаем EXE из ZIP
+                        return self.handle_zip_update(zip_asset, latest_version)
+                    else:
+                        return False, "В релизе не найдены EXE файлы или ZIP архивы с программой"
 
                 info = {
                     "version": latest_version,
@@ -142,6 +172,25 @@ class UpdateManager:
             return False, f"Ошибка сети: {str(e)}"
         except Exception as e:
             return False, f"Ошибка проверки обновлений GitHub: {str(e)}"
+
+    def handle_zip_update(self, zip_asset, version):
+        """Обработать обновление из ZIP архива"""
+        try:
+            print(f"📦 Обработка ZIP архива: {zip_asset['name']}")
+
+            info = {
+                "version": version,
+                "download_url": zip_asset['browser_download_url'],
+                "release_notes": f"Обновление версии {version} (ZIP архив)",
+                "release_name": f"DocumentFiller v{version}",
+                "update_type": "github_zip",
+                "asset_name": zip_asset['name'],
+                "is_zip": True
+            }
+            return True, info
+
+        except Exception as e:
+            return False, f"Ошибка обработки ZIP архива: {str(e)}"
 
     def download_from_github(self, url, asset_name):
         """Скачать обновление с GitHub"""
@@ -180,7 +229,7 @@ class UpdateManager:
             file_size = os.path.getsize(file_path)
             print(f"📊 Размер скачанного файла: {file_size} байт")
 
-            if not self.is_valid_exe_file(file_path):
+            if file_name.endswith('.exe') and not self.is_valid_exe_file(file_path):
                 return False, "Скачанный файл не является корректным EXE"
 
             print(f"✅ Файл успешно скачан: {file_path}")
@@ -188,6 +237,43 @@ class UpdateManager:
 
         except Exception as e:
             return False, f"Ошибка скачивания с GitHub: {str(e)}"
+
+    def extract_exe_from_zip(self, zip_path):
+        """Извлечь EXE файл из ZIP архива"""
+        try:
+            temp_dir = tempfile.mkdtemp()
+            print(f"🗜️ Распаковка ZIP архива: {zip_path}")
+
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                # Ищем EXE файлы в архиве
+                exe_files = [f for f in zip_ref.namelist() if f.endswith('.exe')]
+
+                if not exe_files:
+                    return False, "В ZIP архиве не найдены EXE файлы"
+
+                # Извлекаем первый найденный EXE
+                exe_file = exe_files[0]
+                print(f"📁 Найден EXE в архиве: {exe_file}")
+
+                zip_ref.extract(exe_file, temp_dir)
+                extracted_path = os.path.join(temp_dir, exe_file)
+
+                # Если файл находится во вложенной папке, находим его полный путь
+                if os.path.isdir(extracted_path):
+                    for root, dirs, files in os.walk(extracted_path):
+                        for file in files:
+                            if file.endswith('.exe'):
+                                extracted_path = os.path.join(root, file)
+                                break
+
+                if not os.path.isfile(extracted_path):
+                    return False, "Не удалось извлечь EXE файл из архива"
+
+                print(f"✅ EXE извлечен: {extracted_path}")
+                return True, extracted_path
+
+        except Exception as e:
+            return False, f"Ошибка распаковки ZIP: {str(e)}"
 
     def install_update(self, update_info):
         """Установить обновление"""
@@ -200,6 +286,7 @@ class UpdateManager:
 
             download_url = update_info.get("download_url")
             asset_name = update_info.get("asset_name", "DocumentFiller.exe")
+            is_zip = update_info.get("is_zip", False)
 
             if not download_url:
                 return False, "Не указана ссылка для скачивания"
@@ -214,6 +301,14 @@ class UpdateManager:
 
             if not os.path.exists(downloaded_file):
                 return False, "Файл не был скачан"
+
+            # Если это ZIP архив, извлекаем EXE
+            if is_zip:
+                print("🗜️ Обнаружен ZIP архив, извлекаем EXE...")
+                success, result = self.extract_exe_from_zip(downloaded_file)
+                if not success:
+                    return False, result
+                downloaded_file = result
 
             bat_content = self.create_update_bat_script(downloaded_file)
 

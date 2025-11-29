@@ -1,6 +1,7 @@
 {
-  "type": "mail_ru_cloud",
-  "mail_ru_cloud_url": "https://cloud.mail.ru/public/49wa/SD8CijQJ5",
-  "current_version": "1.0.30",
+  "type": "github",
+  "github_repo": "https://github.com/vavilon1205/DocumentFiller",
+  "current_version": "1.0.36",
+  "update_url": "https://github.com/vavilon1205/DocumentFiller/releases/latest",
   "online_license_db_url": ""
 }
