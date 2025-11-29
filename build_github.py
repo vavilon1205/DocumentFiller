@@ -212,13 +212,15 @@ exe = EXE(
 
 
 def create_github_zip(source_dir, zip_filename):
-    """Создать ZIP архив для GitHub"""
+    """Создать ZIP архив для GitHub с EXE в корне"""
     try:
         with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            # Добавляем все файлы из source_dir в корень ZIP
             for root, dirs, files in os.walk(source_dir):
                 for file in files:
                     file_path = os.path.join(root, file)
-                    arcname = os.path.relpath(file_path, os.path.dirname(source_dir))
+                    # Используем только имя файла (без путей) для помещения в корень
+                    arcname = file
                     zipf.write(file_path, arcname)
 
         # Перемещаем ZIP в dist

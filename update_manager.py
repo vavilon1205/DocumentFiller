@@ -1,4 +1,4 @@
-# update_manager.py - ИСПРАВЛЕННАЯ ВЕРСИЯ С ПРАВИЛЬНЫМ СРАВНЕНИЕМ ВЕРСИЙ
+# update_manager.py - ИСПРАВЛЕННАЯ ВЕРСИЯ ДЛЯ ПОИСКА EXE В ПАПКАХ
 import os
 import sys
 import json
@@ -133,6 +133,7 @@ class UpdateManager:
 
                 # Ищем EXE файл в ассетах - РАСШИРЕННЫЙ ПОИСК
                 exe_asset = None
+                zip_asset = None
                 assets = release_info.get('assets', [])
 
                 print(f"📦 Найдено ассетов в релизе: {len(assets)}")
@@ -151,6 +152,7 @@ class UpdateManager:
                     lambda name: name.endswith('.exe')  # Любой EXE файл
                 ]
 
+                # Сначала ищем EXE файлы
                 for pattern in search_patterns:
                     for asset in assets:
                         if pattern(asset['name'].lower()):
@@ -160,13 +162,23 @@ class UpdateManager:
                     if exe_asset:
                         break
 
+                # Если EXE не найден, ищем ZIP архив
                 if not exe_asset:
-                    # Если EXE не найден, ищем ZIP архив
-                    zip_asset = None
-                    for asset in assets:
-                        if asset['name'].endswith('.zip') and 'documentfiller' in asset['name'].lower():
-                            zip_asset = asset
-                            print(f"✅ Найден ZIP архив: {asset['name']}")
+                    print("🔍 EXE файл не найден, ищем ZIP архив...")
+                    zip_search_patterns = [
+                        lambda name: name.endswith('.zip') and 'documentfiller' in name.lower(),
+                        lambda name: name.endswith('.zip') and 'document' in name.lower(),
+                        lambda name: name.endswith('.zip') and 'filler' in name.lower(),
+                        lambda name: name.endswith('.zip')  # Любой ZIP файл
+                    ]
+
+                    for pattern in zip_search_patterns:
+                        for asset in assets:
+                            if pattern(asset['name'].lower()):
+                                zip_asset = asset
+                                print(f"✅ Найден ZIP архив: {asset['name']}")
+                                break
+                        if zip_asset:
                             break
 
                     if zip_asset:
@@ -284,39 +296,77 @@ class UpdateManager:
             return False, f"Ошибка скачивания с GitHub: {str(e)}"
 
     def extract_exe_from_zip(self, zip_path):
-        """Извлечь EXE файл из ZIP архива"""
+        """Извлечь EXE файл из ZIP архива - УЛУЧШЕННАЯ ВЕРСИЯ ДЛЯ ПОИСКА В ПАПКАХ"""
         try:
             temp_dir = tempfile.mkdtemp()
             print(f"🗜️ Распаковка ZIP архива: {zip_path}")
 
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                # Ищем EXE файлы в архиве
-                exe_files = [f for f in zip_ref.namelist() if f.endswith('.exe') and 'documentfiller' in f.lower()]
+                # Получаем список всех файлов в архиве
+                all_files = zip_ref.namelist()
+                print(f"📁 Всего файлов в архиве: {len(all_files)}")
 
-                # Если не нашли по имени, берем первый EXE
-                if not exe_files:
-                    exe_files = [f for f in zip_ref.namelist() if f.endswith('.exe')]
+                # Ищем EXE файлы в архиве (включая подпапки)
+                exe_files = []
+                for file_path in all_files:
+                    if file_path.lower().endswith('.exe'):
+                        exe_files.append(file_path)
+                        print(f"   Найден EXE: {file_path}")
 
                 if not exe_files:
                     return False, "В ZIP архиве не найдены EXE файлы"
 
-                # Извлекаем первый найденный EXE
-                exe_file = exe_files[0]
-                print(f"📁 Найден EXE в архиве: {exe_file}")
+                # Сортируем EXE файлы по приоритету
+                prioritized_exe_files = []
 
-                zip_ref.extract(exe_file, temp_dir)
-                extracted_path = os.path.join(temp_dir, exe_file)
+                # Приоритет 1: EXE файлы с "documentfiller" в имени
+                for exe_file in exe_files:
+                    if 'documentfiller' in exe_file.lower():
+                        prioritized_exe_files.append((1, exe_file))
 
-                # Если файл находится во вложенной папке, находим его полный путь
+                # Приоритет 2: EXE файлы в корне архива
+                for exe_file in exe_files:
+                    if '/' not in exe_file and '\\' not in exe_file:
+                        if (1, exe_file) not in prioritized_exe_files:
+                            prioritized_exe_files.append((2, exe_file))
+
+                # Приоритет 3: EXE файлы в папке dist
+                for exe_file in exe_files:
+                    if 'dist/' in exe_file.lower() or 'dist\\' in exe_file.lower():
+                        if (1, exe_file) not in prioritized_exe_files and (2, exe_file) not in prioritized_exe_files:
+                            prioritized_exe_files.append((3, exe_file))
+
+                # Приоритет 4: Все остальные EXE файлы
+                for exe_file in exe_files:
+                    if (1, exe_file) not in prioritized_exe_files and \
+                            (2, exe_file) not in prioritized_exe_files and \
+                            (3, exe_file) not in prioritized_exe_files:
+                        prioritized_exe_files.append((4, exe_file))
+
+                # Сортируем по приоритету
+                prioritized_exe_files.sort(key=lambda x: x[0])
+
+                if not prioritized_exe_files:
+                    return False, "Не удалось определить подходящий EXE файл в архиве"
+
+                # Берем EXE файл с наивысшим приоритетом
+                best_exe_file = prioritized_exe_files[0][1]
+                print(f"✅ Выбран EXE файл: {best_exe_file} (приоритет: {prioritized_exe_files[0][0]})")
+
+                # Извлекаем выбранный EXE
+                zip_ref.extract(best_exe_file, temp_dir)
+                extracted_path = os.path.join(temp_dir, best_exe_file)
+
+                # Если извлекли папку, ищем EXE внутри
                 if os.path.isdir(extracted_path):
+                    print(f"🔍 Извлеченная路径是目录，正在搜索EXE文件...")
                     for root, dirs, files in os.walk(extracted_path):
                         for file in files:
-                            if file.endswith('.exe'):
-                                extracted_path = os.path.join(root, file)
-                                break
-
-                if not os.path.isfile(extracted_path):
-                    return False, "Не удалось извлечь EXE файл из архива"
+                            if file.lower().endswith('.exe'):
+                                new_path = os.path.join(root, file)
+                                print(f"✅ Найден EXE внутри директории: {new_path}")
+                                return True, new_path
+                    return False, "В извлеченной директории не найдено EXE файлов"
 
                 print(f"✅ EXE извлечен: {extracted_path}")
                 return True, extracted_path
@@ -352,7 +402,7 @@ class UpdateManager:
                 return False, "Файл не был скачан"
 
             # Если это ZIP архив, извлекаем EXE
-            if is_zip:
+            if is_zip or downloaded_file.lower().endswith('.zip'):
                 print("🗜️ Обнаружен ZIP архив, извлекаем EXE...")
                 success, result = self.extract_exe_from_zip(downloaded_file)
                 if not success:
@@ -432,7 +482,7 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-echo [6/7] Проверка нового EXЕ...
+echo [6/7] Проверка нового EXE...
 if not exist "{os.path.join(self.script_dir, self.exe_name)}" (
     echo ОШИБКА: Новый EXE не создан!
     pause
