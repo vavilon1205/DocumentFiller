@@ -107,7 +107,7 @@ class MainWindow(QMainWindow):
 
         # Проверка лицензии
         self.check_license_on_startup()
-        QTimer.singleShot(5000, self.check_for_updates_on_startup)
+        QTimer.singleShot(1000, self.check_for_updates_on_startup)
 
     def get_script_dir(self):
         """Получить директорию скрипта"""
@@ -1236,7 +1236,7 @@ class MainWindow(QMainWindow):
                 "О программе",
                 f"Программа заполнения согласий и личных карточек\n\n"
                 f"Версия: {__version__}\n\n"
-                "Разработчик: Строчков Сергей Константинович\n"
+                "Разработчик: Строчковв Сергей Константинович\n"
                 "Телефон: 8(920)791-30-43\n"
                 "WhatsApp • Telegram"
             )
