@@ -1094,7 +1094,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка", f"Ошибка при установке обновления:\n{str(e)}")
 
     def perform_update_installation(self, update_info, progress_dialog):
-        """Выполнить установку обновления - ИСПРАВЛЕННЫЕ ОТСТУПЫ"""
+        """Выполнить установку обновления - С BAT-СКРИПТОМ"""
         try:
             success, message = self.update_manager.download_and_install_update(update_info)
             progress_dialog.close()
@@ -1102,10 +1102,14 @@ class MainWindow(QMainWindow):
             if success:
                 QMessageBox.information(
                     self,
-                    "Обновление установлено",
-                    "✅ Обновление успешно установлено!\n\n"
-                    "Программа будет перезапущена для применения изменений."
+                    "Обновление запущено",
+                    "✅ Процесс обновления запущен!\n\n"
+                    "Программа закроется и будет автоматически обновлена.\n"
+                    "После обновления откроется новая версия."
                 )
+
+                # Закрываем текущее приложение
+                self.close()
             else:
                 QMessageBox.critical(
                     self,

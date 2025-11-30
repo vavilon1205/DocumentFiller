@@ -1,4 +1,4 @@
-# update_manager.py - ПРОСТАЯ И НАДЕЖНАЯ СИСТЕМА ОБНОВЛЕНИЙ
+# update_manager.py - ИСПРАВЛЕННАЯ ВЕРСИЯ С BAT-СКРИПТОМ ДЛЯ ЗАМЕНЫ ФАЙЛА
 import os
 import sys
 import json
@@ -170,7 +170,7 @@ class UpdateManager:
             return False, f"Ошибка проверки обновлений GitHub: {str(e)}"
 
     def download_and_install_update(self, update_info):
-        """Скачать и установить обновление - ПРОСТАЯ И НАДЕЖНАЯ ВЕРСИЯ"""
+        """Скачать и установить обновление с использованием BAT-скрипта"""
         try:
             print("🔄 Начало процесса обновления...")
 
@@ -216,63 +216,97 @@ class UpdateManager:
 
             # Ищем EXE файл в распакованных файлах
             print("🔍 Поиск EXE файла в архиве...")
-            exe_path = self.find_exe_in_directory(extract_dir)
+            new_exe_path = self.find_exe_in_directory(extract_dir)
 
-            if not exe_path:
+            if not new_exe_path:
                 return False, "EXE файл не найден в архиве"
 
-            print(f"✅ EXE файл найден: {exe_path}")
+            print(f"✅ EXE файл найден: {new_exe_path}")
 
             # Проверяем валидность EXE
-            if not self.is_valid_exe_file(exe_path):
+            if not self.is_valid_exe_file(new_exe_path):
                 return False, "Найденный файл не является валидным EXE"
-
-            # Создаем резервную копию текущего EXE
-            backup_path = self.create_backup()
-            if not backup_path:
-                return False, "Не удалось создать резервную копию"
 
             # Получаем путь к текущему EXE
             current_exe = os.path.join(self.script_dir, self.exe_name)
             print(f"🔧 Текущий EXE: {current_exe}")
 
-            # Закрываем текущее приложение
-            print("🔒 Закрытие текущего приложения...")
+            # Создаем BAT-скрипт для обновления
+            bat_script_path = self.create_update_script(current_exe, new_exe_path, temp_dir)
+            if not bat_script_path:
+                return False, "Не удалось создать скрипт обновления"
 
-            # Копируем новый EXE поверх старого
-            print("📋 Копирование нового EXE файла...")
-            shutil.copy2(exe_path, current_exe)
+            print(f"✅ BAT-скрипт создан: {bat_script_path}")
 
-            # Проверяем, что копирование прошло успешно
-            if not os.path.exists(current_exe):
-                return False, "Не удалось скопировать новый EXE файл"
+            # Запускаем BAT-скрипт
+            print("🚀 Запуск скрипта обновления...")
+            subprocess.Popen([bat_script_path], shell=True)
 
-            print("✅ Новый EXE файл успешно скопирован")
-
-            # Запускаем новую версию
-            print("🚀 Запуск новой версии...")
-            self.launch_new_version(current_exe)
-
-            # Удаляем временные файлы (через несколько секунд, чтобы убедиться что все работает)
-            print("🧹 Очистка временных файлов...")
-            self.cleanup_temp_files(temp_dir)
-
-            return True, "Обновление успешно установлено! Запускается новая версия..."
+            return True, "Обновление запущено. Программа закроется и будет обновлена автоматически."
 
         except Exception as e:
             return False, f"Ошибка установки обновления: {str(e)}"
 
+    def create_update_script(self, current_exe, new_exe_path, temp_dir):
+        """Создать BAT-скрипт для обновления"""
+        try:
+            # Создаем простой BAT-скрипт
+            bat_content = f"""@echo off
+chcp 65001 >nul
+echo ===============================================
+echo    DocumentFiller - Обновление программы
+echo ===============================================
+echo.
+echo Ожидание завершения текущей программы...
+timeout /t 2 /nobreak >nul
+
+echo Завершение процесса {os.path.basename(current_exe)}...
+taskkill /IM "{os.path.basename(current_exe)}" /F >nul 2>&1
+
+echo Ожидание освобождения файла...
+timeout /t 3 /nobreak >nul
+
+echo Замена файла программы...
+copy "{new_exe_path}" "{current_exe}" >nul 2>&1
+
+if %errorlevel% neq 0 (
+    echo Ошибка: Не удалось заменить файл программы
+    pause
+    exit /b 1
+)
+
+echo Очистка временных файлов...
+rmdir /s /q "{temp_dir}" >nul 2>&1
+
+echo Запуск обновленной программы...
+start "" "{current_exe}"
+
+echo Обновление завершено успешно!
+del "%~f0"
+"""
+
+            bat_path = os.path.join(self.script_dir, "update_documentfiller.bat")
+            with open(bat_path, 'w', encoding='utf-8') as f:
+                f.write(bat_content)
+
+            return bat_path
+
+        except Exception as e:
+            print(f"❌ Ошибка создания BAT-скрипта: {e}")
+            return None
+
     def find_exe_in_directory(self, directory):
         """Найти EXE файл в директории и поддиректориях"""
         try:
+            # Сначала ищем файл с именем DocumentFiller
             for root, dirs, files in os.walk(directory):
                 for file in files:
-                    if file.lower().endswith('.exe') and 'documentfiller' in file.lower():
+                    if file.lower() == 'documentfiller.exe':
                         exe_path = os.path.join(root, file)
                         print(f"🔍 Найден EXE: {exe_path}")
                         return exe_path
 
-            # Если не нашли по имени, ищем любой EXE файл
+            # Если не нашли, ищем любой EXE файл
             for root, dirs, files in os.walk(directory):
                 for file in files:
                     if file.lower().endswith('.exe'):
@@ -311,61 +345,6 @@ class UpdateManager:
         except Exception as e:
             print(f"❌ Ошибка проверки EXE файла: {e}")
             return False
-
-    def create_backup(self):
-        """Создать резервную копию текущей версии"""
-        try:
-            current_exe = os.path.join(self.script_dir, self.exe_name)
-            if not os.path.exists(current_exe):
-                return None
-
-            backup_dir = os.path.join(self.script_dir, "backup")
-            os.makedirs(backup_dir, exist_ok=True)
-
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_name = f"{self.exe_name}.backup.{timestamp}"
-            backup_path = os.path.join(backup_dir, backup_name)
-
-            shutil.copy2(current_exe, backup_path)
-            print(f"✅ Создана резервная копия: {backup_path}")
-
-            return backup_path
-
-        except Exception as e:
-            print(f"❌ Ошибка создания резервной копии: {e}")
-            return None
-
-    def launch_new_version(self, exe_path):
-        """Запустить новую версию программы"""
-        try:
-            print(f"🚀 Запуск: {exe_path}")
-
-            # Запускаем новую версию
-            if os.path.exists(exe_path):
-                subprocess.Popen([exe_path], cwd=self.script_dir)
-                return True
-            else:
-                print(f"❌ Файл для запуска не существует: {exe_path}")
-                return False
-
-        except Exception as e:
-            print(f"❌ Ошибка запуска новой версии: {e}")
-            return False
-
-    def cleanup_temp_files(self, temp_dir):
-        """Очистить временные файлы"""
-        try:
-            if os.path.exists(temp_dir):
-                print(f"🧹 Удаление временной директории: {temp_dir}")
-
-                # Даем немного времени перед удалением
-                import time
-                time.sleep(2)
-
-                shutil.rmtree(temp_dir, ignore_errors=True)
-                print("✅ Временные файлы удалены")
-        except Exception as e:
-            print(f"⚠️ Не удалось удалить временные файлы: {e}")
 
     def is_newer_version(self, version1, version2):
         """Сравнить версии, вернуть True если version1 новее version2"""
