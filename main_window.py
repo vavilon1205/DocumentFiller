@@ -429,10 +429,10 @@ class MainWindow(QMainWindow):
         # Меню Сервис
         service_menu = menubar.addMenu('Сервис')
 
-        update_action = QAction('Проверить обновления', self)
-        update_action.setFont(QFont("Segoe UI", 14))
-        update_action.triggered.connect(self.check_for_updates)
-        service_menu.addAction(update_action)
+        # update_action = QAction('Проверить обновления', self)
+        # update_action.setFont(QFont("Segoe UI", 14))
+        # update_action.triggered.connect(self.check_for_updates)
+        # service_menu.addAction(update_action)
 
         service_menu.addSeparator()
 
@@ -1236,7 +1236,7 @@ class MainWindow(QMainWindow):
                 "О программе",
                 f"Программа заполнения согласий и личных карточек\n\n"
                 f"Версия: {__version__}\n\n"
-                "Разработчик: Строчковв Сергей Константинович\n"
+                "Разработчик: Строчков Сергей Константинович\n"
                 "Телефон: 8(920)791-30-43\n"
                 "WhatsApp • Telegram"
             )
