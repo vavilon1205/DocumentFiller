@@ -1,4 +1,4 @@
-# update_manager.py - ИСПРАВЛЕННАЯ ВЕРСИЯ С BAT-СКРИПТОМ ДЛЯ ЗАМЕНЫ ФАЙЛА
+# update_manager.py - ВЕРСИЯ С ОТКРЫТИЕМ НА ПЕРЕДНЕМ ПЛАНЕ
 import os
 import sys
 import json
@@ -170,7 +170,7 @@ class UpdateManager:
             return False, f"Ошибка проверки обновлений GitHub: {str(e)}"
 
     def download_and_install_update(self, update_info):
-        """Скачать и установить обновление с использованием BAT-скрипта"""
+        """Скачать и установить обновление с открытием на переднем плане"""
         try:
             print("🔄 Начало процесса обновления...")
 
@@ -231,8 +231,8 @@ class UpdateManager:
             current_exe = os.path.join(self.script_dir, self.exe_name)
             print(f"🔧 Текущий EXE: {current_exe}")
 
-            # Создаем BAT-скрипт для обновления
-            bat_script_path = self.create_update_script(current_exe, new_exe_path, temp_dir)
+            # Создаем BAT-скрипт для обновления с открытием на переднем плане
+            bat_script_path = self.create_update_script_with_foreground(current_exe, new_exe_path, temp_dir)
             if not bat_script_path:
                 return False, "Не удалось создать скрипт обновления"
 
@@ -247,10 +247,10 @@ class UpdateManager:
         except Exception as e:
             return False, f"Ошибка установки обновления: {str(e)}"
 
-    def create_update_script(self, current_exe, new_exe_path, temp_dir):
-        """Создать BAT-скрипт для обновления"""
+    def create_update_script_with_foreground(self, current_exe, new_exe_path, temp_dir):
+        """Создать BAT-скрипт для обновления с открытием на переднем плане"""
         try:
-            # Создаем простой BAT-скрипт
+            # Создаем BAT-скрипт с PowerShell для управления окном
             bat_content = f"""@echo off
 chcp 65001 >nul
 echo ===============================================
@@ -278,10 +278,13 @@ if %errorlevel% neq 0 (
 echo Очистка временных файлов...
 rmdir /s /q "{temp_dir}" >nul 2>&1
 
-echo Запуск обновленной программы...
-start "" "{current_exe}"
+echo Запуск обновленной программы на переднем плане...
+
+REM Используем PowerShell для запуска программы на переднем плане
+powershell -Command "& {{Start-Process '{current_exe}' -WindowStyle Maximized}}"
 
 echo Обновление завершено успешно!
+timeout /t 2 /nobreak >nul
 del "%~f0"
 """
 
