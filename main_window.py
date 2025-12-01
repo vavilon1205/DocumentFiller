@@ -1094,9 +1094,13 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка", f"Ошибка при установке обновления:\n{str(e)}")
 
     def perform_update_installation(self, update_info, progress_dialog):
-        """Выполнить установку обновления - С BAT-СКРИПТОМ"""
+        """Выполнить установку обновления - С СОХРАНЕНИЕМ ГЕОМЕТРИИ"""
         try:
-            success, message = self.update_manager.download_and_install_update(update_info)
+            # Сначала сохраняем геометрию окна
+            geometry_file = self.save_window_geometry_for_update()
+
+            # Затем запускаем обновление
+            success, message = self.update_manager.download_and_install_update(update_info, geometry_file)
             progress_dialog.close()
 
             if success:
@@ -1429,3 +1433,65 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"Ошибка при закрытии приложения: {e}")
             event.accept()
+
+    # main_window.py - ДОБАВЛЯЕМ В КЛАСС MainWindow
+
+    def save_window_geometry_for_update(self):
+        """Сохранить геометрию окна для использования после обновления"""
+        try:
+            # Получаем текущую геометрию окна
+            geometry = {
+                "x": self.x(),
+                "y": self.y(),
+                "width": self.width(),
+                "height": self.height(),
+                "is_maximized": self.isMaximized()
+            }
+
+            # Сохраняем во временный файл
+            import json
+            geometry_file = os.path.join(self.get_script_dir(), "window_geometry.json")
+            with open(geometry_file, 'w', encoding='utf-8') as f:
+                json.dump(geometry, f, indent=2, ensure_ascii=False)
+
+            print(f"✅ Геометрия окна сохранена: {geometry}")
+            return geometry_file
+
+        except Exception as e:
+            print(f"❌ Ошибка сохранения геометрии окна: {e}")
+            return None
+
+    def restore_window_geometry_from_update(self):
+        """Восстановить геометрию окна после обновления"""
+        try:
+            geometry_file = os.path.join(self.get_script_dir(), "window_geometry.json")
+            if os.path.exists(geometry_file):
+                import json
+                with open(geometry_file, 'r', encoding='utf-8') as f:
+                    geometry = json.load(f)
+
+                # Восстанавливаем размер и положение
+                if not geometry.get("is_maximized", False):
+                    self.setGeometry(
+                        geometry.get("x", 100),
+                        geometry.get("y", 100),
+                        geometry.get("width", 1200),
+                        geometry.get("height", 800)
+                    )
+                else:
+                    # Если окно было развернуто, сначала устанавливаем нормальный размер
+                    self.setGeometry(
+                        geometry.get("x", 100),
+                        geometry.get("y", 100),
+                        geometry.get("width", 1200),
+                        geometry.get("height", 800)
+                    )
+                    # Затем разворачиваем
+                    self.showMaximized()
+
+                # Удаляем временный файл
+                os.remove(geometry_file)
+                print(f"✅ Геометрия окна восстановлена: {geometry}")
+
+        except Exception as e:
+            print(f"❌ Ошибка восстановления геометрии окна: {e}")

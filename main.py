@@ -1,4 +1,4 @@
-# main.py - точка входа в приложение
+# main.py - ОБНОВЛЕННАЯ ВЕРСИЯ
 import os
 import sys
 from PyQt5.QtWidgets import QApplication
@@ -27,6 +27,9 @@ def main():
     # Создание и отображение главного окна
     window = MainWindow(settings, theme_manager)
     window.show()
+
+    # Восстанавливаем геометрию окна после обновления
+    window.restore_window_geometry_from_update()
 
     sys.exit(app.exec_())
 

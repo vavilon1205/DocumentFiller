@@ -1,4 +1,4 @@
-# update_manager.py - ВЕРСИЯ С ОТКРЫТИЕМ НА ПЕРЕДНЕМ ПЛАНЕ
+# update_manager.py - ПОЛНАЯ ИСПРАВЛЕННАЯ ВЕРСИЯ
 import os
 import sys
 import json
@@ -169,8 +169,8 @@ class UpdateManager:
         except Exception as e:
             return False, f"Ошибка проверки обновлений GitHub: {str(e)}"
 
-    def download_and_install_update(self, update_info):
-        """Скачать и установить обновление с открытием на переднем плане"""
+    def download_and_install_update(self, update_info, geometry_file=None):
+        """Скачать и установить обновление"""
         try:
             print("🔄 Начало процесса обновления...")
 
@@ -231,8 +231,8 @@ class UpdateManager:
             current_exe = os.path.join(self.script_dir, self.exe_name)
             print(f"🔧 Текущий EXE: {current_exe}")
 
-            # Создаем BAT-скрипт для обновления с открытием на переднем плане
-            bat_script_path = self.create_update_script_with_foreground(current_exe, new_exe_path, temp_dir)
+            # Создаем улучшенный BAT-скрипт для обновления
+            bat_script_path = self.create_update_script(current_exe, new_exe_path, temp_dir, geometry_file)
             if not bat_script_path:
                 return False, "Не удалось создать скрипт обновления"
 
@@ -247,44 +247,58 @@ class UpdateManager:
         except Exception as e:
             return False, f"Ошибка установки обновления: {str(e)}"
 
-    def create_update_script_with_foreground(self, current_exe, new_exe_path, temp_dir):
-        """Создать BAT-скрипт для обновления с открытием на переднем плане"""
+    def create_update_script(self, current_exe, new_exe_path, temp_dir, geometry_file=None):
+        """Создать BAT-скрипт для обновления"""
         try:
-            # Создаем BAT-скрипт с PowerShell для управления окном
+            # Имя файла для использования в командах
+            exe_name = os.path.basename(current_exe)
+
+            # Получаем директорию программы
+            program_dir = os.path.dirname(current_exe)
+
+            # Создаем BAT-скрипт
             bat_content = f"""@echo off
 chcp 65001 >nul
+title DocumentFiller - Обновление программы
 echo ===============================================
 echo    DocumentFiller - Обновление программы
 echo ===============================================
 echo.
-echo Ожидание завершения текущей программы...
-timeout /t 2 /nobreak >nul
 
-echo Завершение процесса {os.path.basename(current_exe)}...
-taskkill /IM "{os.path.basename(current_exe)}" /F >nul 2>&1
+echo Шаг 1: Закрытие текущей программы...
+taskkill /IM "{exe_name}" /F >nul 2>&1
 
-echo Ожидание освобождения файла...
-timeout /t 3 /nobreak >nul
-
-echo Замена файла программы...
-copy "{new_exe_path}" "{current_exe}" >nul 2>&1
-
-if %errorlevel% neq 0 (
-    echo Ошибка: Не удалось заменить файл программы
-    pause
-    exit /b 1
+echo Шаг 2: Ожидание завершения процесса...
+:wait_loop
+tasklist /FI "IMAGENAME eq {exe_name}" 2>nul | find /I "{exe_name}" >nul
+if %errorlevel% equ 0 (
+    echo Процесс еще активен, ожидаем 1 секунду...
+    timeout /t 1 /nobreak >nul
+    goto wait_loop
 )
+echo Процесс завершен.
 
-echo Очистка временных файлов...
+echo Шаг 3: Замена файла программы...
+:check_file
+timeout /t 1 /nobreak >nul
+copy /Y "{new_exe_path}" "{current_exe}" >nul 2>&1
+if %errorlevel% neq 0 (
+    echo Файл еще занят, повторяем попытку...
+    goto check_file
+)
+echo Файл успешно заменен.
+
+echo Шаг 4: Очистка временных файлов...
 rmdir /s /q "{temp_dir}" >nul 2>&1
 
-echo Запуск обновленной программы на переднем плане...
+echo Шаг 5: Запуск обновленной программы...
+start "" /D "{program_dir}" "{exe_name}"
 
-REM Используем PowerShell для запуска программы на переднем плане
-powershell -Command "& {{Start-Process '{current_exe}' -WindowStyle Maximized}}"
-
-echo Обновление завершено успешно!
+echo Шаг 6: Обновление завершено успешно!
+echo Программа будет запущена через 2 секунды...
 timeout /t 2 /nobreak >nul
+
+echo Удаление скрипта обновления...
 del "%~f0"
 """
 
@@ -304,9 +318,19 @@ del "%~f0"
             # Сначала ищем файл с именем DocumentFiller
             for root, dirs, files in os.walk(directory):
                 for file in files:
-                    if file.lower() == 'documentfiller.exe':
+                    file_lower = file.lower()
+                    if file_lower == 'documentfiller.exe':
                         exe_path = os.path.join(root, file)
                         print(f"🔍 Найден EXE: {exe_path}")
+                        return exe_path
+
+            # Если не нашли, ищем любой EXE файл с 'document' в названии
+            for root, dirs, files in os.walk(directory):
+                for file in files:
+                    file_lower = file.lower()
+                    if file_lower.endswith('.exe') and 'document' in file_lower:
+                        exe_path = os.path.join(root, file)
+                        print(f"🔍 Найден EXE (с 'document' в названии): {exe_path}")
                         return exe_path
 
             # Если не нашли, ищем любой EXE файл
@@ -314,7 +338,7 @@ del "%~f0"
                 for file in files:
                     if file.lower().endswith('.exe'):
                         exe_path = os.path.join(root, file)
-                        print(f"🔍 Найден EXE (альтернативный): {exe_path}")
+                        print(f"🔍 Найден EXE (любой): {exe_path}")
                         return exe_path
 
             return None
