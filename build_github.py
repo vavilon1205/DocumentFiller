@@ -109,7 +109,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='DocumentFiller',
+    name='Программа',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -147,8 +147,8 @@ exe = EXE(
         print("✅ Сборка завершена успешно!")
 
         # Создаем файлы для GitHub Releases
-        original_exe_dir = os.path.join('dist', 'DocumentFiller')
-        original_exe = os.path.join(original_exe_dir, 'DocumentFiller.exe')
+        original_exe_dir = os.path.join('dist', 'Программа')
+        original_exe = os.path.join(original_exe_dir, 'Программа.exe')
 
         if os.path.exists(original_exe):
             # Создаем EXE файл с версией в названии (ОСНОВНОЙ ДЛЯ ОБНОВЛЕНИЙ)
