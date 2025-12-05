@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QTableWidget, QTableWidgetItem, QHeaderView, QDialog,
                              QTabWidget, QTextEdit, QProgressBar, QMenu, QAction,
                              QSplitter, QFormLayout, QGroupBox, QScrollArea, QAbstractItemView,
-                             QComboBox)
+                             QComboBox, QApplication)  # Добавлен QApplication
 from PyQt5.QtCore import Qt, QSettings, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont, QIcon, QPalette, QColor, QCursor
 from PyQt5 import QtCore
@@ -98,12 +98,12 @@ class MainWindow(QMainWindow):
         self.records_data = []
         self.is_licensed = False
 
-        self.init_ui()
-        self.load_settings()
-
-        # Инициализация менеджеров
+        # Инициализация менеджеров ДО init_ui
         self.update_manager = UpdateManager()
         self.license_manager = LicenseManager(self.get_script_dir())
+
+        self.init_ui()
+        self.load_settings()
 
         # Проверка лицензии
         self.check_license_on_startup()
@@ -334,6 +334,37 @@ class MainWindow(QMainWindow):
 
         license_layout.addLayout(license_info_layout)
 
+        # === ДОБАВЛЯЕМ ОТОБРАЖЕНИЕ ID ОБОРУДОВАНИЯ ===
+        hardware_layout = QHBoxLayout()
+        hardware_label = QLabel("ID оборудования:")
+        hardware_label.setFont(QFont("Segoe UI", 12))
+        hardware_layout.addWidget(hardware_label)
+
+        # Получаем ID оборудования из license_manager с обработкой ошибок
+        try:
+            if hasattr(self, 'license_manager'):
+                hardware_id = self.license_manager.get_hardware_id()
+            else:
+                hardware_id = "Ошибка: менеджер лицензий не инициализирован"
+        except Exception as e:
+            print(f"Ошибка получения hardware_id: {e}")
+            hardware_id = "Ошибка получения ID"
+
+        self.hardware_id_label = QLabel(hardware_id)
+        self.hardware_id_label.setFont(QFont("Consolas", 12, QFont.Bold))
+        self.hardware_id_label.setStyleSheet(
+            "QLabel { padding: 30px}")
+        hardware_layout.addWidget(self.hardware_id_label)
+
+        # Кнопка для копирования ID
+        copy_hardware_btn = QPushButton("Копировать")
+        copy_hardware_btn.setFont(QFont("Segoe UI", 11))
+        copy_hardware_btn.setToolTip("Скопировать ID оборудования в буфер обмена")
+        copy_hardware_btn.clicked.connect(self.copy_hardware_id)
+        hardware_layout.addWidget(copy_hardware_btn)
+
+        license_layout.addLayout(hardware_layout)
+
         # Поле для ввода ключа
         key_layout = QHBoxLayout()
         key_label = QLabel("Лицензионный ключ:")
@@ -355,6 +386,12 @@ class MainWindow(QMainWindow):
         activate_btn.clicked.connect(self.activate_license)
         license_buttons_layout.addWidget(activate_btn)
 
+        generate_btn = QPushButton("Получить ключ")
+        generate_btn.setFont(QFont("Segoe UI", 13))
+        generate_btn.setToolTip("Открыть инструкцию по получению лицензионного ключа")
+        generate_btn.clicked.connect(self.show_get_license_info)
+        license_buttons_layout.addWidget(generate_btn)
+
         license_layout.addLayout(license_buttons_layout)
 
         # Статус лицензии
@@ -365,21 +402,21 @@ class MainWindow(QMainWindow):
         layout.addWidget(license_group)
 
         # Группа информации
-        info_group = QGroupBox("О программе")
+        info_group = QGroupBox("")
         info_group.setFont(QFont("Segoe UI", 13))
         info_layout = QVBoxLayout(info_group)
 
         about_text = QTextEdit()
         about_text.setReadOnly(True)
         about_text.setFont(QFont("Segoe UI", 12))
-        about_text.setHtml(f"""<pre style="font-family: 'Courier New', background: #f0f0f0; padding: 10px; border-radius: 5px;">
- 👨‍💻 РАЗРАБОТЧИК
- 📛 Строчков Сергей Константинович
- 📞 8(920)791-30-43
- 💬 WhatsApp • Telegram
-</pre>
-        """)
-        info_layout.addWidget(about_text)
+#         about_text.setHtml(f"""<pre style="font-family: 'Courier New', background: #f0f0f0; padding: 10px; border-radius: 5px;">
+#  👨‍💻 РАЗРАБОТЧИК
+#  📛 Строчков Сергей Константинович
+#  📞 8(920)791-30-43
+#  💬 WhatsApp • Telegram
+# </pre>
+#         """)
+#         info_layout.addWidget(about_text)
 
         layout.addWidget(info_group)
 
@@ -1162,41 +1199,70 @@ class MainWindow(QMainWindow):
             dialog = QDialog(self)
             dialog.setWindowTitle("Активация лицензии")
             dialog.setModal(True)
-            dialog.resize(500, 250)
+            dialog.resize(600, 400)
 
             layout = QVBoxLayout(dialog)
 
-            info_label = QLabel(
-                "Для использования программы требуется активация лицензии.\n"
-                "Без активированной лицензии программа будет заблокирована."
-            )
-            info_label.setFont(QFont("Segoe UI", 12))
-            info_label.setWordWrap(True)
-            layout.addWidget(info_label)
+            # Получаем ID оборудования
+            hardware_id = self.license_manager.get_hardware_id()
 
-            license_layout = QHBoxLayout()
-            license_label = QLabel("Лицензионный ключ:")
-            license_label.setFont(QFont("Segoe UI", 12))
-            license_layout.addWidget(license_label)
+            # Информационная группа с ID оборудования
+            info_group = QGroupBox("Информация для получения ключа")
+            info_group.setFont(QFont("Segoe UI", 12))
+            info_layout = QVBoxLayout(info_group)
+
+            info_text = QLabel(
+                "Для получения лицензионного ключа сообщите разработчику:\n"
+                f"✅ ID оборудования: {hardware_id}\n"
+                "✅ Желаемый срок лицензии (1 месяц, 6 месяцев, 1 год и т.д.)"
+            )
+            info_text.setFont(QFont("Segoe UI", 12))
+            info_text.setWordWrap(True)
+            info_layout.addWidget(info_text)
+
+            # Кнопка для копирования ID
+            copy_id_btn = QPushButton("📋 Скопировать ID оборудования")
+            copy_id_btn.setFont(QFont("Segoe UI", 12))
+            copy_id_btn.clicked.connect(lambda: self.copy_hardware_id_dialog(dialog, hardware_id))
+            info_layout.addWidget(copy_id_btn)
+
+            layout.addWidget(info_group)
+
+            # Группа активации
+            activate_group = QGroupBox("Активация лицензии")
+            activate_group.setFont(QFont("Segoe UI", 12))
+            activate_layout = QVBoxLayout(activate_group)
+
+            key_layout = QHBoxLayout()
+            key_label = QLabel("Введите лицензионный ключ:")
+            key_label.setFont(QFont("Segoe UI", 12))
+            key_layout.addWidget(key_label)
 
             license_edit = QLineEdit()
             license_edit.setFont(QFont("Segoe UI", 12))
-            license_edit.setPlaceholderText("Введите лицензионный ключ...")
-            license_layout.addWidget(license_edit)
+            license_edit.setPlaceholderText("DF-XXXXXXXX-YYYYMMDD-DDD-XXXXXXXXXXXXXXXX")
+            key_layout.addWidget(license_edit)
 
-            layout.addLayout(license_layout)
+            activate_layout.addLayout(key_layout)
 
+            layout.addWidget(activate_group)
+
+            # Кнопки
             buttons_layout = QHBoxLayout()
+
             activate_btn = QPushButton("Активировать")
             activate_btn.setFont(QFont("Segoe UI", 12))
+            activate_btn.setStyleSheet("QPushButton { padding: 10px; background-color: #4CAF50; color: white; }")
             buttons_layout.addWidget(activate_btn)
 
             cancel_btn = QPushButton("Отмена")
             cancel_btn.setFont(QFont("Segoe UI", 12))
+            cancel_btn.clicked.connect(dialog.reject)
             buttons_layout.addWidget(cancel_btn)
 
             layout.addLayout(buttons_layout)
 
+            # Статус
             status_label = QLabel("")
             status_label.setFont(QFont("Segoe UI", 11))
             status_label.setWordWrap(True)
@@ -1222,12 +1288,27 @@ class MainWindow(QMainWindow):
                     status_label.setStyleSheet("color: red;")
 
             activate_btn.clicked.connect(activate)
-            cancel_btn.clicked.connect(dialog.reject)
 
             if dialog.exec_() == QDialog.Accepted:
                 self.update_license_status()
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Ошибка при показе диалога лицензии: {str(e)}")
+
+    def copy_hardware_id_dialog(self, dialog, hardware_id):
+        """Скопировать ID оборудования из диалога"""
+        try:
+            clipboard = QApplication.clipboard()
+            clipboard.setText(hardware_id)
+
+            # Показать временное уведомление
+            msg = QMessageBox(dialog)
+            msg.setWindowTitle("ID скопирован")
+            msg.setText(f"ID оборудования скопирован в буфер обмена:\n{hardware_id}")
+            msg.setIcon(QMessageBox.Information)
+            msg.setStandardButtons(QMessageBox.Ok)
+            msg.exec_()
+        except Exception as e:
+            QMessageBox.warning(dialog, "Ошибка", f"Не удалось скопировать ID: {e}")
 
     def show_about(self):
         """Показать информацию о программе"""
@@ -1495,3 +1576,51 @@ class MainWindow(QMainWindow):
 
         except Exception as e:
             print(f"❌ Ошибка восстановления геометрии окна: {e}")
+
+    # === ДОБАВЛЕННЫЕ МЕТОДЫ ДЛЯ РАБОТЫ С ID ОБОРУДОВАНИЯ ===
+
+    def copy_hardware_id(self):
+        """Скопировать ID оборудования в буфер обмена"""
+        try:
+            hardware_id = self.hardware_id_label.text()
+            clipboard = QApplication.clipboard()
+            clipboard.setText(hardware_id)
+
+            QMessageBox.information(self, "ID скопирован",
+                                    f"ID оборудования скопирован в буфер обмена:\n\n{hardware_id}\n\n"
+                                    "Сообщите этот ID разработчику для получения лицензионного ключа.")
+        except Exception as e:
+            QMessageBox.warning(self, "Ошибка", f"Не удалось скопировать ID: {e}")
+
+    def show_get_license_info(self):
+        """Показать информацию о получении лицензионного ключа"""
+        try:
+            hardware_id = self.license_manager.get_hardware_id()
+
+            message = f"""
+📋 ДЛЯ ПОЛУЧЕНИЯ ЛИЦЕНЗИОННОГО КЛЮЧА:
+
+1. Сообщите разработчику ID вашего оборудования:
+   🔢 {hardware_id}
+
+2. Укажите желаемый срок лицензии:
+   - 1 месяц
+   - 6 месяцев  
+   - 1 год
+   - Другой срок
+
+3. Получите лицензионный ключ от разработчика
+
+4. Введите ключ в поле "Лицензионный ключ" и нажмите "Активировать"
+
+👨‍💻 КОНТАКТЫ РАЗРАБОТЧИКА:
+📛 Строчков Сергей Константинович
+📞 8(920)791-30-43
+💬 WhatsApp • Telegram
+
+ID оборудования можно скопировать, нажав кнопку "Копировать" выше.
+"""
+
+            QMessageBox.information(self, "Получение лицензионного ключа", message)
+        except Exception as e:
+            QMessageBox.warning(self, "Ошибка", f"Не удалось показать информацию: {e}")
