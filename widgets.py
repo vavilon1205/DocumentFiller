@@ -60,7 +60,7 @@ class EditRecordDialog(QDialog):
         try:
             self.setWindowTitle("Редактирование записи")
             self.setModal(True)
-            self.setMinimumSize(600, 500)  # Увеличил размер диалога
+            self.setMinimumSize(800, 600)  # Увеличил размер диалога для новых полей
 
             layout = QVBoxLayout(self)
 
@@ -78,7 +78,15 @@ class EditRecordDialog(QDialog):
                 ('pi', 'Паспорт выдан'),
                 ('di', 'Дата выдачи'),
                 ('cs', 'Серия УЧО'),
-                ('cn', 'Номер УЧО')
+                ('cn', 'Номер УЧО'),
+                ('cd', 'Дата выдачи УЧО'),
+                ('ce', 'Срок окончания УЧО'),
+                ('msd', 'Дата выдачи мед. Справки'),
+                ('med', 'Дата окончания мед. Справки'),
+                ('ppd', 'Дата акта ПП'),
+                ('ppe', 'Дата окончания ПП'),
+                ('boss', 'Начальник охраны'),
+                ('note', 'Примечание')
             ]
 
             for key, label in field_keys:
@@ -91,15 +99,15 @@ class EditRecordDialog(QDialog):
                     elif key in ['cn', 'ps', 'pn']:
                         max_len = 6 if key in ['cn', 'pn'] else 4
                         field = ValidatedLineEdit('digits', max_len)
-                    elif key == 'di':
+                    elif key in ['di', 'cd', 'ce', 'msd', 'med', 'ppd', 'ppe']:
                         field = ValidatedLineEdit('date', 10)
                     else:
                         field = QLineEdit()
-                        field.setFont(QFont("Segoe UI", 14))  # Увеличенный шрифт
+                        field.setFont(QFont("Segoe UI", 14))
 
                     field.setText(value)
                     label_widget = QLabel(label + ":")
-                    label_widget.setFont(QFont("Segoe UI", 14))  # Увеличенный шрифт
+                    label_widget.setFont(QFont("Segoe UI", 14))
                     form_layout.addRow(label_widget, field)
                     self.fields[key] = field
 
@@ -107,10 +115,10 @@ class EditRecordDialog(QDialog):
                     print(f"Ошибка создания поля {key}: {e}")
                     # Создаем обычное поле в случае ошибки
                     field = QLineEdit()
-                    field.setFont(QFont("Segoe UI", 14))  # Увеличенный шрифт
+                    field.setFont(QFont("Segoe UI", 14))
                     field.setText(str(self.values.get(key, "")))
                     label_widget = QLabel(label + ":")
-                    label_widget.setFont(QFont("Segoe UI", 14))  # Увеличенный шрифт
+                    label_widget.setFont(QFont("Segoe UI", 14))
                     form_layout.addRow(label_widget, field)
                     self.fields[key] = field
 
@@ -120,12 +128,12 @@ class EditRecordDialog(QDialog):
             buttons_layout = QHBoxLayout()
 
             save_btn = QPushButton("Сохранить")
-            save_btn.setFont(QFont("Segoe UI", 14))  # Увеличенный шрифт
+            save_btn.setFont(QFont("Segoe UI", 14))
             save_btn.clicked.connect(self.accept)
             buttons_layout.addWidget(save_btn)
 
             cancel_btn = QPushButton("Отмена")
-            cancel_btn.setFont(QFont("Segoe UI", 14))  # Увеличенный шрифт
+            cancel_btn.setFont(QFont("Segoe UI", 14))
             cancel_btn.clicked.connect(self.reject)
             buttons_layout.addWidget(cancel_btn)
 

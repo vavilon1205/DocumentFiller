@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QTableWidget, QTableWidgetItem, QHeaderView, QDialog,
                              QTabWidget, QTextEdit, QProgressBar, QMenu, QAction,
                              QSplitter, QFormLayout, QGroupBox, QScrollArea, QAbstractItemView,
-                             QComboBox, QApplication)  # Добавлен QApplication
+                             QComboBox)
 from PyQt5.QtCore import Qt, QSettings, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont, QIcon, QPalette, QColor, QCursor
 from PyQt5 import QtCore
@@ -69,7 +69,8 @@ class DocumentWorker(QThread):
                 context.update({
                     'n_c': context.get('n', '').upper(),
                     'fn_c': context.get('fn', '').upper(),
-                    'mn_c': context.get('mn', '').upper()
+                    'mn_c': context.get('mn', '').upper(),
+                    'boss_c': context.get('boss', '').upper() if context.get('boss') else ''
                 })
 
                 # Рендерим документ
@@ -98,7 +99,7 @@ class MainWindow(QMainWindow):
         self.records_data = []
         self.is_licensed = False
 
-        # Инициализация менеджеров ДО init_ui
+        # Инициализация менеджеров
         self.update_manager = UpdateManager()
         self.license_manager = LicenseManager(self.get_script_dir())
 
@@ -179,7 +180,7 @@ class MainWindow(QMainWindow):
             elif key in ['cn', 'ps', 'pn']:
                 max_len = 6 if key in ['cn', 'pn'] else 4
                 field = ValidatedLineEdit('digits', max_len)
-            elif key == 'di':
+            elif key in ['di', 'cd', 'ce', 'msd', 'med', 'ppd', 'ppe']:
                 field = ValidatedLineEdit('date', 10)
             else:
                 field = QLineEdit()
@@ -272,15 +273,16 @@ class MainWindow(QMainWindow):
 
         # Таблица записей
         self.records_table = RecordsTable(self.settings)
-        self.records_table.setColumnCount(len(self.get_field_keys()) + 1)
-        headers = [label for _, label in self.get_field_keys()] + ["RowNum"]
+        field_keys = self.get_field_keys()
+        self.records_table.setColumnCount(len(field_keys) + 1)
+        headers = [label for _, label in field_keys] + ["RowNum"]
         self.records_table.setHorizontalHeaderLabels(headers)
 
-        font = QFont("Segoe UI", 13)
+        font = QFont("Segoe UI", 12)  # Немного уменьшим шрифт для таблицы
         self.records_table.horizontalHeader().setFont(font)
         self.records_table.setFont(font)
 
-        self.records_table.setColumnHidden(len(self.get_field_keys()), True)
+        self.records_table.setColumnHidden(len(field_keys), True)
         self.records_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.records_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.records_table.customContextMenuRequested.connect(self.show_records_context_menu)
@@ -353,7 +355,7 @@ class MainWindow(QMainWindow):
         self.hardware_id_label = QLabel(hardware_id)
         self.hardware_id_label.setFont(QFont("Consolas", 12, QFont.Bold))
         self.hardware_id_label.setStyleSheet(
-            "QLabel { padding: 30px}")
+            "QLabel { background-color: #f0f0f0; padding: 5px; border: 1px solid #ccc; }")
         hardware_layout.addWidget(self.hardware_id_label)
 
         # Кнопка для копирования ID
@@ -402,21 +404,21 @@ class MainWindow(QMainWindow):
         layout.addWidget(license_group)
 
         # Группа информации
-        info_group = QGroupBox("")
+        info_group = QGroupBox("О программе")
         info_group.setFont(QFont("Segoe UI", 13))
         info_layout = QVBoxLayout(info_group)
 
         about_text = QTextEdit()
         about_text.setReadOnly(True)
         about_text.setFont(QFont("Segoe UI", 12))
-#         about_text.setHtml(f"""<pre style="font-family: 'Courier New', background: #f0f0f0; padding: 10px; border-radius: 5px;">
-#  👨‍💻 РАЗРАБОТЧИК
-#  📛 Строчков Сергей Константинович
-#  📞 8(920)791-30-43
-#  💬 WhatsApp • Telegram
-# </pre>
-#         """)
-#         info_layout.addWidget(about_text)
+        about_text.setHtml(f"""<pre style="font-family: 'Courier New', background: #f0f0f0; padding: 10px; border-radius: 5px;">
+ 👨‍💻 РАЗРАБОТЧИК
+ 📛 Строчков Сергей Константинович
+ 📞 8(920)791-30-43
+ 💬 WhatsApp • Telegram
+</pre>
+        """)
+        info_layout.addWidget(about_text)
 
         layout.addWidget(info_group)
 
@@ -466,13 +468,6 @@ class MainWindow(QMainWindow):
         # Меню Сервис
         service_menu = menubar.addMenu('Сервис')
 
-        # update_action = QAction('Проверить обновления', self)
-        # update_action.setFont(QFont("Segoe UI", 14))
-        # update_action.triggered.connect(self.check_for_updates)
-        # service_menu.addAction(update_action)
-
-        service_menu.addSeparator()
-
         license_action = QAction('Активировать лицензию', self)
         license_action.setFont(QFont("Segoe UI", 14))
         license_action.triggered.connect(self.show_license_dialog)
@@ -498,7 +493,15 @@ class MainWindow(QMainWindow):
             ('pi', 'Паспорт выдан'),
             ('di', 'Дата выдачи'),
             ('cs', 'Серия УЧО'),
-            ('cn', 'Номер УЧО')
+            ('cn', 'Номер УЧО'),
+            ('cd', 'Дата выдачи УЧО'),
+            ('ce', 'Срок окончания УЧО'),
+            ('msd', 'Дата выдачи мед. Справки'),
+            ('med', 'Дата окончания мед. Справки'),
+            ('ppd', 'Дата акта ПП'),
+            ('ppe', 'Дата окончания ПП'),
+            ('boss', 'Начальник охраны'),
+            ('note', 'Примечание')
         ]
 
     def load_settings(self):
@@ -584,13 +587,16 @@ class MainWindow(QMainWindow):
         if not self.is_cn_unique(cn, exclude_row):
             return False, "Номер УЧО должен быть уникальным"
 
-        # Проверка даты
-        di = values.get('di', '')
-        if di:
-            try:
-                datetime.strptime(di, '%d.%m.%Y')
-            except ValueError:
-                return False, "Дата выдачи паспорта должна быть в формате ДД.ММ.ГГГГ"
+        # Проверка дат
+        date_fields = ['di', 'cd', 'ce', 'msd', 'med', 'ppd', 'ppe']
+        for date_field in date_fields:
+            date_value = values.get(date_field, '')
+            if date_value:
+                try:
+                    datetime.strptime(date_value, '%d.%m.%Y')
+                except ValueError:
+                    field_name = dict(self.get_field_keys())[date_field]
+                    return False, f"Поле '{field_name}' должно быть в формате ДД.ММ.ГГГГ"
 
         return True, ""
 
@@ -768,6 +774,9 @@ class MainWindow(QMainWindow):
 
             # Включаем сортировку обратно
             self.records_table.setSortingEnabled(True)
+
+            # Настраиваем ширину колонок
+            self.records_table.resizeColumnsToContents()
 
             # После загрузки данных загружаем состояние таблицы
             QTimer.singleShot(100, self.records_table.load_state)
@@ -1515,8 +1524,6 @@ class MainWindow(QMainWindow):
             print(f"Ошибка при закрытии приложения: {e}")
             event.accept()
 
-    # main_window.py - ДОБАВЛЯЕМ В КЛАСС MainWindow
-
     def save_window_geometry_for_update(self):
         """Сохранить геометрию окна для использования после обновления"""
         try:
@@ -1576,8 +1583,6 @@ class MainWindow(QMainWindow):
 
         except Exception as e:
             print(f"❌ Ошибка восстановления геометрии окна: {e}")
-
-    # === ДОБАВЛЕННЫЕ МЕТОДЫ ДЛЯ РАБОТЫ С ID ОБОРУДОВАНИЯ ===
 
     def copy_hardware_id(self):
         """Скопировать ID оборудования в буфер обмена"""
