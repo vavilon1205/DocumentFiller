@@ -26,12 +26,12 @@ class UpdateManager:
     def find_exe_name(self):
         """Автоматически найти имя EXE файла в директории"""
         exe_files = [f for f in os.listdir(self.script_dir)
-                     if f.endswith('.exe') and 'DocumentFiller' in f]
+                     if f.endswith('.exe') and 'Программа' in f]
 
         if exe_files:
             return exe_files[0]
         else:
-            return "DocumentFiller.exe"
+            return "Программа.exe"
 
     def get_script_dir(self):
         """Возвращает директорию приложения"""
@@ -175,7 +175,7 @@ class UpdateManager:
             print("🔄 Начало процесса обновления...")
 
             # Создаем временную директорию
-            temp_dir = tempfile.mkdtemp(prefix="docfiller_update_")
+            temp_dir = tempfile.mkdtemp(prefix="Program_update_")
             print(f"📁 Временная директория: {temp_dir}")
 
             # Скачиваем архив исходного кода
@@ -319,7 +319,7 @@ del "%~f0"
             for root, dirs, files in os.walk(directory):
                 for file in files:
                     file_lower = file.lower()
-                    if file_lower == 'documentfiller.exe':
+                    if file_lower == 'Программа.exe':
                         exe_path = os.path.join(root, file)
                         print(f"🔍 Найден EXE: {exe_path}")
                         return exe_path
