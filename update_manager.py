@@ -1,4 +1,4 @@
-# update_manager.py - ПОЛНАЯ ИСПРАВЛЕННАЯ ВЕРСИЯ
+# update_manager.py - ИСПРАВЛЕННАЯ ВЕРСИЯ С УЛУЧШЕННЫМ ОБНОВЛЕНИЕМ
 import os
 import sys
 import json
@@ -7,9 +7,11 @@ import tempfile
 import requests
 import subprocess
 import re
+import time
 from pathlib import Path
 from datetime import datetime
 import zipfile
+import psutil  # Нужно установить: pip install psutil
 
 
 class UpdateManager:
@@ -26,12 +28,20 @@ class UpdateManager:
     def find_exe_name(self):
         """Автоматически найти имя EXE файла в директории"""
         exe_files = [f for f in os.listdir(self.script_dir)
-                     if f.endswith('.exe') and 'Программа' in f]
+                     if f.endswith('.exe')]
 
+        # Пробуем найти наш файл по разным вариантам названия
+        preferred_names = ['Программа.exe', 'DocumentFiller.exe', 'Document_Filler.exe']
+
+        for name in preferred_names:
+            if os.path.exists(os.path.join(self.script_dir, name)):
+                return name
+
+        # Если не нашли предпочтительные имена, берем первый exe файл
         if exe_files:
             return exe_files[0]
         else:
-            return "Программа.exe"
+            return "DocumentFiller.exe"
 
     def get_script_dir(self):
         """Возвращает директорию приложения"""
@@ -148,6 +158,19 @@ class UpdateManager:
             if self.is_newer_version(latest_version, self.current_version):
                 print(f"🎉 Найдена новая версия: {latest_version} > {self.current_version}")
 
+                # Ищем exe файл в ассетах релиза
+                assets = release_info.get('assets', [])
+                exe_url = None
+                exe_filename = None
+
+                for asset in assets:
+                    asset_name = asset.get('name', '')
+                    if asset_name.endswith('.exe'):
+                        exe_url = asset.get('browser_download_url')
+                        exe_filename = asset_name
+                        print(f"✅ Найден EXE файл в релизе: {exe_filename}")
+                        break
+
                 # Формируем информацию об обновлении
                 update_info = {
                     "version": latest_version,
@@ -155,7 +178,9 @@ class UpdateManager:
                     "release_notes": release_info.get('body', ''),
                     "release_name": release_info.get('name', ''),
                     "owner": owner,
-                    "repo": repo
+                    "repo": repo,
+                    "exe_url": exe_url,
+                    "exe_filename": exe_filename
                 }
 
                 return True, update_info
@@ -170,10 +195,79 @@ class UpdateManager:
             return False, f"Ошибка проверки обновлений GitHub: {str(e)}"
 
     def download_and_install_update(self, update_info, geometry_file=None):
-        """Скачать и установить обновление"""
+        """Скачать и установить обновление - УЛУЧШЕННАЯ ВЕРСИЯ"""
         try:
             print("🔄 Начало процесса обновления...")
 
+            # Если нет прямого URL к EXE, используем старый метод
+            if not update_info.get('exe_url'):
+                print("⚠️ Не найден прямой URL к EXE, используем архивный метод")
+                return self.download_and_install_update_legacy(update_info, geometry_file)
+
+            # Создаем временную директорию
+            temp_dir = tempfile.mkdtemp(prefix="Program_update_")
+            print(f"📁 Временная директория: {temp_dir}")
+
+            # Скачиваем EXE файл
+            exe_url = update_info['exe_url']
+            exe_filename = update_info['exe_filename'] or f"DocumentFiller_v{update_info['version']}.exe"
+            exe_path = os.path.join(temp_dir, exe_filename)
+
+            print(f"⬇️ Скачивание EXE файла: {exe_url}")
+
+            # Скачиваем EXE
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            response = requests.get(exe_url, headers=headers, stream=True, timeout=30)
+            response.raise_for_status()
+
+            total_size = int(response.headers.get('content-length', 0))
+            downloaded_size = 0
+
+            with open(exe_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded_size += len(chunk)
+                        if total_size > 0:
+                            progress = (downloaded_size / total_size) * 100
+                            print(f"📥 Прогресс загрузки: {progress:.1f}%", end='\r')
+
+            print(f"\n✅ EXE файл скачан: {exe_path} ({downloaded_size} bytes)")
+
+            # Проверяем валидность EXE
+            if not self.is_valid_exe_file(exe_path):
+                return False, "Скачанный файл не является валидным EXE"
+
+            # Получаем путь к текущему EXE
+            current_exe = os.path.join(self.script_dir, self.exe_name)
+            print(f"🔧 Текущий EXE: {current_exe}")
+
+            # Создаем улучшенный BAT-скрипт для обновления
+            bat_script_path = self.create_update_script_improved(current_exe, exe_path, temp_dir, geometry_file)
+            if not bat_script_path:
+                return False, "Не удалось создать скрипт обновления"
+
+            print(f"✅ BAT-скрипт создан: {bat_script_path}")
+
+            # Запускаем BAT-скрипт
+            print("🚀 Запуск скрипта обновления...")
+
+            # Используем subprocess с CREATE_NEW_CONSOLE чтобы окно было видимым
+            CREATE_NEW_CONSOLE = 0x00000010
+            subprocess.Popen(
+                f'start "" /B "{bat_script_path}"',
+                shell=True,
+                creationflags=CREATE_NEW_CONSOLE
+            )
+
+            return True, "Обновление запущено. Программа закроется и будет обновлена автоматически."
+
+        except Exception as e:
+            return False, f"Ошибка установки обновления: {str(e)}"
+
+    def download_and_install_update_legacy(self, update_info, geometry_file=None):
+        """Скачать и установить обновление (старый метод через архив)"""
+        try:
             # Создаем временную директорию
             temp_dir = tempfile.mkdtemp(prefix="Program_update_")
             print(f"📁 Временная директория: {temp_dir}")
@@ -193,19 +287,12 @@ class UpdateManager:
             response = requests.get(source_zip_url, headers=headers, stream=True, timeout=30)
             response.raise_for_status()
 
-            total_size = int(response.headers.get('content-length', 0))
-            downloaded_size = 0
-
             with open(zip_path, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
-                        downloaded_size += len(chunk)
-                        if total_size > 0:
-                            progress = (downloaded_size / total_size) * 100
-                            print(f"📥 Прогресс загрузки: {progress:.1f}%", end='\r')
 
-            print(f"\n✅ Архив скачан: {zip_path} ({downloaded_size} bytes)")
+            print(f"✅ Архив скачан: {zip_path}")
 
             # Распаковываем архив
             extract_dir = os.path.join(temp_dir, "extracted")
@@ -232,7 +319,7 @@ class UpdateManager:
             print(f"🔧 Текущий EXE: {current_exe}")
 
             # Создаем улучшенный BAT-скрипт для обновления
-            bat_script_path = self.create_update_script(current_exe, new_exe_path, temp_dir, geometry_file)
+            bat_script_path = self.create_update_script_improved(current_exe, new_exe_path, temp_dir, geometry_file)
             if not bat_script_path:
                 return False, "Не удалось создать скрипт обновления"
 
@@ -240,23 +327,34 @@ class UpdateManager:
 
             # Запускаем BAT-скрипт
             print("🚀 Запуск скрипта обновления...")
-            subprocess.Popen([bat_script_path], shell=True)
+
+            # Используем subprocess с CREATE_NEW_CONSOLE чтобы окно было видимым
+            CREATE_NEW_CONSOLE = 0x00000010
+            subprocess.Popen(
+                f'start "" /B "{bat_script_path}"',
+                shell=True,
+                creationflags=CREATE_NEW_CONSOLE
+            )
 
             return True, "Обновление запущено. Программа закроется и будет обновлена автоматически."
 
         except Exception as e:
             return False, f"Ошибка установки обновления: {str(e)}"
 
-    def create_update_script(self, current_exe, new_exe_path, temp_dir, geometry_file=None):
-        """Создать BAT-скрипт для обновления"""
+    def create_update_script_improved(self, current_exe, new_exe_path, temp_dir, geometry_file=None):
+        """Создать УЛУЧШЕННЫЙ BAT-скрипт для обновления"""
         try:
             # Имя файла для использования в командах
             exe_name = os.path.basename(current_exe)
+            exe_name_no_ext = os.path.splitext(exe_name)[0]
 
             # Получаем директорию программы
             program_dir = os.path.dirname(current_exe)
 
-            # Создаем BAT-скрипт
+            # Получаем PID текущего процесса
+            current_pid = os.getpid()
+
+            # Создаем УЛУЧШЕННЫЙ BAT-скрипт
             bat_content = f"""@echo off
 chcp 65001 >nul
 title DocumentFiller - Обновление программы
@@ -265,41 +363,99 @@ echo    DocumentFiller - Обновление программы
 echo ===============================================
 echo.
 
-echo Шаг 1: Закрытие текущей программы...
-taskkill /IM "{exe_name}" /F >nul 2>&1
+echo Шаг 1: Определение текущего процесса...
+echo Текущий PID: {current_pid}
+echo Имя файла: {exe_name}
 
-echo Шаг 2: Ожидание завершения процесса...
-:wait_loop
+echo.
+echo Шаг 2: Закрытие текущей программы...
+echo Пожалуйста, не закрывайте это окно!
+
+REM Пробуем разные методы закрытия программы
+:kill_process
+echo Попытка закрыть программу...
+
+REM 1. Закрываем по PID (текущий процесс)
+taskkill /PID {current_pid} /F >nul 2>&1
+
+REM 2. Закрываем по имени файла
+taskkill /IM "{exe_name}" /F >nul 2>&1
+taskkill /IM "{exe_name_no_ext}.exe" /F >nul 2>&1
+
+REM 3. Закрываем все процессы с похожими именами
+for %%a in ("Программа" "DocumentFiller" "Document_Filler") do (
+    taskkill /IM "%%~a.exe" /F >nul 2>&1
+)
+
+echo Ожидание 3 секунды для завершения процессов...
+timeout /t 3 /nobreak >nul
+
+REM Проверяем, остались ли процессы
 tasklist /FI "IMAGENAME eq {exe_name}" 2>nul | find /I "{exe_name}" >nul
 if %errorlevel% equ 0 (
-    echo Процесс еще активен, ожидаем 1 секунду...
-    timeout /t 1 /nobreak >nul
-    goto wait_loop
+    echo Процесс еще активен, повторяем попытку...
+    goto kill_process
 )
-echo Процесс завершен.
+
+echo Все процессы успешно закрыты!
+echo.
 
 echo Шаг 3: Замена файла программы...
-:check_file
-timeout /t 1 /nobreak >nul
+:replace_file
+echo Замена файла {exe_name}...
+
+REM Делаем несколько попыток копирования
+set attempts=0
+:copy_loop
+set /a attempts+=1
+echo Попытка копирования #%attempts%
+
 copy /Y "{new_exe_path}" "{current_exe}" >nul 2>&1
 if %errorlevel% neq 0 (
-    echo Файл еще занят, повторяем попытку...
-    goto check_file
+    if %attempts% geq 5 (
+        echo Ошибка: Не удалось заменить файл после 5 попыток
+        pause
+        exit /b 1
+    )
+    echo Файл еще занят, ожидаем 2 секунды...
+    timeout /t 2 /nobreak >nul
+    goto copy_loop
 )
-echo Файл успешно заменен.
 
-echo Шаг 4: Очистка временных файлов...
-rmdir /s /q "{temp_dir}" >nul 2>&1
+echo Файл успешно заменен!
+echo.
 
-echo Шаг 5: Запуск обновленной программы...
+echo Шаг 4: Восстановление конфигурации...
+REM Восстанавливаем геометрию окна, если есть
+if exist "{geometry_file}" (
+    copy /Y "{geometry_file}" "{program_dir}\\window_geometry.json" >nul 2>&1
+    echo Геометрия окна восстановлена
+)
+
+echo Шаг 5: Очистка временных файлов...
+if exist "{temp_dir}" (
+    rmdir /s /q "{temp_dir}" >nul 2>&1
+    echo Временные файлы удалены
+)
+
+echo.
+echo Шаг 6: Запуск обновленной программы...
+echo Запуск новой версии...
+
+REM Запускаем новую версию программы
 start "" /D "{program_dir}" "{exe_name}"
 
-echo Шаг 6: Обновление завершено успешно!
-echo Программа будет запущена через 2 секунды...
-timeout /t 2 /nobreak >nul
+echo.
+echo Шаг 7: Обновление завершено успешно!
+echo Новая версия программы запущена!
+echo.
 
-echo Удаление скрипта обновления...
+echo Закрытие этого окна через 5 секунд...
+timeout /t 5 /nobreak >nul
+
+REM Удаляем этот скрипт
 del "%~f0"
+exit
 """
 
             bat_path = os.path.join(self.script_dir, "update_documentfiller.bat")
@@ -312,6 +468,10 @@ del "%~f0"
             print(f"❌ Ошибка создания BAT-скрипта: {e}")
             return None
 
+    def create_update_script(self, current_exe, new_exe_path, temp_dir, geometry_file=None):
+        """Создать BAT-скрипт для обновления (для обратной совместимости)"""
+        return self.create_update_script_improved(current_exe, new_exe_path, temp_dir, geometry_file)
+
     def find_exe_in_directory(self, directory):
         """Найти EXE файл в директории и поддиректориях"""
         try:
@@ -319,18 +479,9 @@ del "%~f0"
             for root, dirs, files in os.walk(directory):
                 for file in files:
                     file_lower = file.lower()
-                    if file_lower == 'Программа.exe':
+                    if file_lower == 'программа.exe' or 'documentfiller' in file_lower or 'document_filler' in file_lower:
                         exe_path = os.path.join(root, file)
                         print(f"🔍 Найден EXE: {exe_path}")
-                        return exe_path
-
-            # Если не нашли, ищем любой EXE файл с 'document' в названии
-            for root, dirs, files in os.walk(directory):
-                for file in files:
-                    file_lower = file.lower()
-                    if file_lower.endswith('.exe') and 'document' in file_lower:
-                        exe_path = os.path.join(root, file)
-                        print(f"🔍 Найден EXE (с 'document' в названии): {exe_path}")
                         return exe_path
 
             # Если не нашли, ищем любой EXE файл
@@ -356,7 +507,7 @@ del "%~f0"
             file_size = os.path.getsize(file_path)
             print(f"📏 Размер файла: {file_size} bytes")
 
-            if file_size < 1024 * 1024:
+            if file_size < 1024 * 1024:  # Меньше 1 MB - подозрительно
                 print(f"❌ Файл слишком мал: {file_size} bytes")
                 return False
 
