@@ -1,4 +1,4 @@
-# main_window.py - главное окно приложения (исправленная версия с правильными отступами)
+# main_window.py - главное окно приложения (исправленная версия с асинхронной проверкой лицензии)
 import os
 import sys
 import re
@@ -10,16 +10,26 @@ from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QTableWidget, QTableWidgetItem, QHeaderView, QDialog,
                              QTabWidget, QTextEdit, QProgressBar, QMenu, QAction,
                              QSplitter, QFormLayout, QGroupBox, QScrollArea, QAbstractItemView,
-                             QComboBox, QApplication)  # Добавлен QApplication
+                             QComboBox, QApplication)
 from PyQt5.QtCore import Qt, QSettings, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont, QIcon, QPalette, QColor, QCursor
-from PyQt5 import QtCore
-import openpyxl
-from docxtpl import DocxTemplate
 
 from widgets import ValidatedLineEdit, EditRecordDialog, RecordsTable
 from update_manager import UpdateManager
 from license_manager import LicenseManager
+
+
+class LicenseCheckThread(QThread):
+    """Поток для асинхронной проверки лицензии"""
+    finished = pyqtSignal(bool, int, str)
+
+    def __init__(self, license_manager):
+        super().__init__()
+        self.license_manager = license_manager
+
+    def run(self):
+        is_valid, days_left, message = self.license_manager.check_license()
+        self.finished.emit(is_valid, days_left, message)
 
 
 class DocumentWorker(QThread):
@@ -36,6 +46,9 @@ class DocumentWorker(QThread):
 
     def run(self):
         try:
+            # Импортируем docxtpl только здесь
+            from docxtpl import DocxTemplate
+
             created_files = []
 
             # Создаем папку для документов
@@ -61,7 +74,7 @@ class DocumentWorker(QThread):
                 # Загружаем шаблон
                 doc = DocxTemplate(template_path)
 
-                # Подготавливаем контекст - исправление для правильной подстановки ФИО
+                # Подготавливаем контекст
                 context = self.fields.copy()
                 context['current_date'] = datetime.now().strftime('%d.%m.%Y')
 
@@ -97,17 +110,19 @@ class MainWindow(QMainWindow):
         self.fields = {}
         self.records_data = []
         self.is_licensed = False
+        self.license_thread = None
+        self.license_check_message = None
 
-        # Инициализация менеджеров ДО init_ui
+        # Инициализация менеджеров
         self.update_manager = UpdateManager()
         self.license_manager = LicenseManager(self.get_script_dir())
 
         self.init_ui()
         self.load_settings()
 
-        # Проверка лицензии
-        self.check_license_on_startup()
-        QTimer.singleShot(1000, self.check_for_updates_on_startup)
+        # Асинхронная проверка лицензии при старте
+        QTimer.singleShot(100, self.async_check_license)
+        QTimer.singleShot(5000, self.silent_update_check)
 
     def get_script_dir(self):
         """Получить директорию скрипта"""
@@ -151,6 +166,16 @@ class MainWindow(QMainWindow):
 
         # Создаем меню
         self.create_menu()
+
+        # Метка для сообщения о проверке лицензии
+        self.license_check_message = QLabel("⏳ Проверка лицензии...")
+        self.license_check_message.setAlignment(Qt.AlignCenter)
+        self.license_check_message.setStyleSheet(
+            "QLabel { background-color: #2196F3; color: white; font-weight: bold; padding: 10px; border-radius: 5px; }"
+        )
+        self.license_check_message.setFont(QFont("Segoe UI", 12, QFont.Bold))
+        self.license_check_message.hide()
+        layout.insertWidget(0, self.license_check_message)
 
     def on_tab_changed(self, index):
         """Обработчик смены вкладки"""
@@ -334,13 +359,12 @@ class MainWindow(QMainWindow):
 
         license_layout.addLayout(license_info_layout)
 
-        # === ДОБАВЛЯЕМ ОТОБРАЖЕНИЕ ID ОБОРУДОВАНИЯ ===
+        # Отображение ID оборудования
         hardware_layout = QHBoxLayout()
         hardware_label = QLabel("ID оборудования:")
         hardware_label.setFont(QFont("Segoe UI", 12))
         hardware_layout.addWidget(hardware_label)
 
-        # Получаем ID оборудования из license_manager с обработкой ошибок
         try:
             if hasattr(self, 'license_manager'):
                 hardware_id = self.license_manager.get_hardware_id()
@@ -352,11 +376,9 @@ class MainWindow(QMainWindow):
 
         self.hardware_id_label = QLabel(hardware_id)
         self.hardware_id_label.setFont(QFont("Consolas", 12, QFont.Bold))
-        self.hardware_id_label.setStyleSheet(
-            "QLabel { padding: 30px}")
+        self.hardware_id_label.setStyleSheet("QLabel { padding: 30px}")
         hardware_layout.addWidget(self.hardware_id_label)
 
-        # Кнопка для копирования ID
         copy_hardware_btn = QPushButton("Копировать")
         copy_hardware_btn.setFont(QFont("Segoe UI", 11))
         copy_hardware_btn.setToolTip("Скопировать ID оборудования в буфер обмена")
@@ -409,21 +431,12 @@ class MainWindow(QMainWindow):
         about_text = QTextEdit()
         about_text.setReadOnly(True)
         about_text.setFont(QFont("Segoe UI", 12))
-#         about_text.setHtml(f"""<pre style="font-family: 'Courier New', background: #f0f0f0; padding: 10px; border-radius: 5px;">
-#  👨‍💻 РАЗРАБОТЧИК
-#  📛 Строчков Сергей Константинович
-#  📞 8(920)791-30-43
-#  💬 WhatsApp • Telegram
-# </pre>
-#         """)
-#         info_layout.addWidget(about_text)
+        # about_text.setHtml(...) закомментировано для краткости
+        info_layout.addWidget(about_text)
 
         layout.addWidget(info_group)
 
         layout.addStretch()
-
-        # Обновляем статус лицензии после инициализации
-        QTimer.singleShot(100, self.update_license_status)
 
     def create_menu(self):
         """Создание меню"""
@@ -465,14 +478,7 @@ class MainWindow(QMainWindow):
 
         # Меню Сервис
         service_menu = menubar.addMenu('Сервис')
-
-        # update_action = QAction('Проверить обновления', self)
-        # update_action.setFont(QFont("Segoe UI", 14))
-        # update_action.triggered.connect(self.check_for_updates)
-        # service_menu.addAction(update_action)
-
         service_menu.addSeparator()
-
         license_action = QAction('Активировать лицензию', self)
         license_action.setFont(QFont("Segoe UI", 14))
         license_action.triggered.connect(self.show_license_dialog)
@@ -480,7 +486,6 @@ class MainWindow(QMainWindow):
 
         # Меню Справка
         help_menu = menubar.addMenu('Справка')
-
         about_action = QAction('О программе', self)
         about_action.setFont(QFont("Segoe UI", 14))
         about_action.triggered.connect(self.show_about)
@@ -533,9 +538,10 @@ class MainWindow(QMainWindow):
         """Создать файл Excel, если он не существует"""
         excel_path = self.get_excel_file_path()
         if not os.path.exists(excel_path):
+            # Импортируем openpyxl только здесь
+            import openpyxl
             wb = openpyxl.Workbook()
             sheet = wb.active
-            # Заголовки столбцов
             for col, (_, label) in enumerate(self.get_field_keys(), 1):
                 sheet.cell(row=1, column=col, value=label)
             wb.save(excel_path)
@@ -604,6 +610,7 @@ class MainWindow(QMainWindow):
             return True
 
         try:
+            import openpyxl
             wb = openpyxl.load_workbook(excel_path)
             sheet = wb.active
 
@@ -633,6 +640,7 @@ class MainWindow(QMainWindow):
             return None
 
         try:
+            import openpyxl
             wb = openpyxl.load_workbook(excel_path)
             sheet = wb.active
 
@@ -666,6 +674,7 @@ class MainWindow(QMainWindow):
     def save_to_excel(self, values):
         """Сохранить данные в Excel"""
         try:
+            import openpyxl
             excel_path = self.get_excel_file_path()
             self.ensure_excel_exists()
 
@@ -715,10 +724,7 @@ class MainWindow(QMainWindow):
             if not selected_items:
                 return None
 
-            # Получаем визуальную строку
             visual_row = selected_items[0].row()
-
-            # Получаем номер строки в Excel из скрытой колонки
             row_number_item = self.records_table.item(visual_row, len(self.get_field_keys()))
             if not row_number_item:
                 return None
@@ -738,6 +744,7 @@ class MainWindow(QMainWindow):
                 self.ensure_excel_exists()
                 return
 
+            import openpyxl
             wb = openpyxl.load_workbook(excel_path)
             sheet = wb.active
 
@@ -840,22 +847,16 @@ class MainWindow(QMainWindow):
 
             # Создаем копию для редактирования
             values = record.copy()
-
-            # Создаем диалог
             dialog = EditRecordDialog(values, self)
             if dialog.exec_() == QDialog.Accepted:
                 new_values = dialog.get_values()
-
-                # Добавляем номер строки для обновления
                 new_values['_row_number'] = record.get('_row_number')
 
-                # Валидация
                 valid, message = self.validate_fields(new_values, record.get('_row_number'))
                 if not valid:
                     QMessageBox.warning(self, "Неверные данные", message)
                     return
 
-                # Сохранение
                 success, message = self.save_to_excel(new_values)
                 if success:
                     QMessageBox.information(self, "Успех", message)
@@ -879,9 +880,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Не выбрано", "Выберите запись для удаления.")
                 return
 
-            # Получаем ФИО для подтверждения
             fio = f"{record.get('n', '')} {record.get('fn', '')} {record.get('mn', '')}".strip()
-
             reply = QMessageBox.question(
                 self,
                 "Подтверждение удаления",
@@ -891,18 +890,16 @@ class MainWindow(QMainWindow):
 
             if reply == QMessageBox.Yes:
                 try:
+                    import openpyxl
                     excel_path = self.get_excel_file_path()
                     wb = openpyxl.load_workbook(excel_path)
                     sheet = wb.active
-
-                    # Удаляем строку (используем сохраненный номер строки)
                     row_to_delete = record['_row_number']
                     sheet.delete_rows(row_to_delete)
                     wb.save(excel_path)
 
                     QMessageBox.information(self, "Удалено", "Запись удалена.")
                     self.load_records()
-
                 except Exception as e:
                     QMessageBox.critical(self, "Ошибка", f"Не удалось удалить запись: {str(e)}")
 
@@ -933,15 +930,12 @@ class MainWindow(QMainWindow):
 
         try:
             values = self.get_field_values()
-
-            # Валидация
             existing_row = self.find_row_by_fullname(values)
             valid, message = self.validate_fields(values, existing_row)
             if not valid:
                 QMessageBox.warning(self, "Неверные данные", message)
                 return
 
-            # Сохранение
             success, message = self.save_to_excel(values)
             if success:
                 QMessageBox.information(self, "Успех", message)
@@ -962,12 +956,10 @@ class MainWindow(QMainWindow):
         try:
             values = self.get_field_values()
 
-            # Проверка обязательных полей
             if not values.get('n') or not values.get('fn'):
                 QMessageBox.warning(self, "Поля не заполнены", "Фамилия и имя обязательны.")
                 return
 
-            # Проверка существования анкеты
             existing_row = self.find_row_by_fullname(values)
             if existing_row is None:
                 reply = QMessageBox.question(
@@ -983,13 +975,11 @@ class MainWindow(QMainWindow):
                         QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить анкету: {message}")
                         return
 
-            # Проверка пути сохранения
             save_root = self.save_path_edit.text() or self.get_default_save_folder()
             if not os.path.isdir(save_root):
                 QMessageBox.critical(self, "Ошибка", "Путь сохранения некорректен.")
                 return
 
-            # Запуск создания документов в отдельном потоке
             self.progress_bar.setVisible(True)
             self.worker = DocumentWorker(save_root, values, self.get_script_dir())
             self.worker.progress.connect(self.progress_bar.setValue)
@@ -1006,7 +996,6 @@ class MainWindow(QMainWindow):
         if created_files:
             values = self.get_field_values()
             folder_name = f"{values.get('n', '')} {values.get('fn', '')} {values.get('mn', '')}".strip()
-
             QMessageBox.information(
                 self,
                 "Готово",
@@ -1071,12 +1060,10 @@ class MainWindow(QMainWindow):
                     QMessageBox.information(self, "Обновления",
                                             "✅ Установлена последняя версия программы.")
                 else:
-                    # Доступно обновление
                     update_info = result
                     version = update_info.get('version', 'Новая версия')
                     download_url = update_info.get('download_url', '')
 
-                    # ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА URL
                     if not download_url.startswith('http'):
                         QMessageBox.warning(self, "Ошибка",
                                             f"Некорректный URL для скачивания: {download_url}")
@@ -1117,14 +1104,12 @@ class MainWindow(QMainWindow):
             if reply != QMessageBox.Yes:
                 return
 
-            # Создаем диалог прогресса
             progress_dialog = QMessageBox(self)
             progress_dialog.setWindowTitle("Установка обновления")
             progress_dialog.setText("Выполняется установка обновления...\nПожалуйста, подождите.")
             progress_dialog.setStandardButtons(QMessageBox.NoButton)
             progress_dialog.show()
 
-            # Даем время отобразиться диалогу
             QTimer.singleShot(100, lambda: self.perform_update_installation(update_info, progress_dialog))
 
         except Exception as e:
@@ -1133,10 +1118,7 @@ class MainWindow(QMainWindow):
     def perform_update_installation(self, update_info, progress_dialog):
         """Выполнить установку обновления - С СОХРАНЕНИЕМ ГЕОМЕТРИИ"""
         try:
-            # Сначала сохраняем геометрию окна
             geometry_file = self.save_window_geometry_for_update()
-
-            # Затем запускаем обновление
             success, message = self.update_manager.download_and_install_update(update_info, geometry_file)
             progress_dialog.close()
 
@@ -1148,8 +1130,6 @@ class MainWindow(QMainWindow):
                     "Программа закроется и будет автоматически обновлена.\n"
                     "После обновления откроется новая версия."
                 )
-
-                # Закрываем текущее приложение
                 self.close()
             else:
                 QMessageBox.critical(
@@ -1176,16 +1156,12 @@ class MainWindow(QMainWindow):
             success, message = self.license_manager.activate_license(license_key)
             if success:
                 QMessageBox.information(self, "Успех", message)
-                # Автоматически разблокируем интерфейс после успешной активации
                 self.is_licensed = True
                 self.unlock_interface()
-                # Обновляем статус лицензии
                 self.update_license_status()
-                # Очищаем поле ввода ключа
                 self.license_edit.clear()
             else:
                 QMessageBox.critical(self, "Ошибка", message)
-                # Оставляем интерфейс заблокированным
                 self.is_licensed = False
                 self.lock_interface()
 
@@ -1203,10 +1179,8 @@ class MainWindow(QMainWindow):
 
             layout = QVBoxLayout(dialog)
 
-            # Получаем ID оборудования
             hardware_id = self.license_manager.get_hardware_id()
 
-            # Информационная группа с ID оборудования
             info_group = QGroupBox("Информация для получения ключа")
             info_group.setFont(QFont("Segoe UI", 12))
             info_layout = QVBoxLayout(info_group)
@@ -1220,7 +1194,6 @@ class MainWindow(QMainWindow):
             info_text.setWordWrap(True)
             info_layout.addWidget(info_text)
 
-            # Кнопка для копирования ID
             copy_id_btn = QPushButton("📋 Скопировать ID оборудования")
             copy_id_btn.setFont(QFont("Segoe UI", 12))
             copy_id_btn.clicked.connect(lambda: self.copy_hardware_id_dialog(dialog, hardware_id))
@@ -1228,7 +1201,6 @@ class MainWindow(QMainWindow):
 
             layout.addWidget(info_group)
 
-            # Группа активации
             activate_group = QGroupBox("Активация лицензии")
             activate_group.setFont(QFont("Segoe UI", 12))
             activate_layout = QVBoxLayout(activate_group)
@@ -1247,7 +1219,6 @@ class MainWindow(QMainWindow):
 
             layout.addWidget(activate_group)
 
-            # Кнопки
             buttons_layout = QHBoxLayout()
 
             activate_btn = QPushButton("Активировать")
@@ -1262,24 +1233,22 @@ class MainWindow(QMainWindow):
 
             layout.addLayout(buttons_layout)
 
-            # Статус
             status_label = QLabel("")
             status_label.setFont(QFont("Segoe UI", 11))
             status_label.setWordWrap(True)
             layout.addWidget(status_label)
 
             def activate():
-                license_key = license_edit.text().strip()
-                if not license_key:
+                key = license_edit.text().strip()
+                if not key:
                     status_label.setText("❌ Введите лицензионный ключ.")
                     status_label.setStyleSheet("color: red;")
                     return
 
-                success, message = self.license_manager.activate_license(license_key)
+                success, message = self.license_manager.activate_license(key)
                 if success:
                     status_label.setText("✅ " + message)
                     status_label.setStyleSheet("color: green;")
-                    # Автоматически разблокируем интерфейс
                     self.is_licensed = True
                     self.unlock_interface()
                     QTimer.singleShot(2000, dialog.accept)
@@ -1299,8 +1268,6 @@ class MainWindow(QMainWindow):
         try:
             clipboard = QApplication.clipboard()
             clipboard.setText(hardware_id)
-
-            # Показать временное уведомление
             msg = QMessageBox(dialog)
             msg.setWindowTitle("ID скопирован")
             msg.setText(f"ID оборудования скопирован в буфер обмена:\n{hardware_id}")
@@ -1313,9 +1280,7 @@ class MainWindow(QMainWindow):
     def show_about(self):
         """Показать информацию о программе"""
         try:
-            # Импортируем версию из version.py
             from version import __version__
-
             QMessageBox.about(
                 self,
                 "О программе",
@@ -1331,7 +1296,6 @@ class MainWindow(QMainWindow):
     def check_for_updates_on_startup(self):
         """Проверить обновления при запуске - тихая проверка"""
         if hasattr(self, 'update_manager'):
-            # Задержка чтобы не мешать запуску
             QTimer.singleShot(5000, self.silent_update_check)
 
     def silent_update_check(self):
@@ -1339,13 +1303,11 @@ class MainWindow(QMainWindow):
         try:
             success, result = self.update_manager.check_for_updates()
             if success and result != "up_to_date":
-                # Показываем ненавязчивое уведомление
                 update_info = result
                 version = update_info.get('version', '')
                 if version.startswith('v'):
                     version = version[1:]
 
-                # Создаем кастомное сообщение
                 msg = QMessageBox(self)
                 msg.setWindowTitle("Доступно обновление")
                 msg.setText(f"Доступна новая версия: {version}")
@@ -1357,8 +1319,40 @@ class MainWindow(QMainWindow):
                 if reply == QMessageBox.Yes:
                     self.install_update(update_info)
         except Exception as e:
-            # Игнорируем ошибки при тихой проверке
             print(f"Тихая проверка обновлений: {e}")
+
+    # === Асинхронная проверка лицензии ===
+    def async_check_license(self):
+        """Запустить асинхронную проверку лицензии"""
+        self.show_license_check_message(True)
+        self.license_thread = LicenseCheckThread(self.license_manager)
+        self.license_thread.finished.connect(self.on_license_checked)
+        self.license_thread.start()
+
+    def on_license_checked(self, is_valid, days_left, message):
+        """Обработка завершения проверки лицензии"""
+        self.is_licensed = is_valid
+        self.update_license_status()
+        self.show_license_check_message(False)
+
+        if not is_valid:
+            self.lock_interface()
+            # Показываем сообщение только если это не первый запуск (чтобы не дублировать)
+            if hasattr(self, 'license_check_message') and self.license_check_message.isVisible():
+                QMessageBox.critical(
+                    self,
+                    "Лицензия не действительна",
+                    f"Программа не может быть запущена.\n\nПричина: {message}\n\n"
+                    "Пожалуйста, активируйте лицензию во вкладке 'Настройки'."
+                )
+                self.tab_widget.setCurrentIndex(2)
+        else:
+            self.unlock_interface()
+
+    def show_license_check_message(self, show=True):
+        """Показать или скрыть сообщение о проверке лицензии"""
+        if hasattr(self, 'license_check_message') and self.license_check_message:
+            self.license_check_message.setVisible(show)
 
     def lock_interface(self):
         """Заблокировать интерфейс при отсутствии лицензии"""
@@ -1425,33 +1419,8 @@ class MainWindow(QMainWindow):
             self.license_message_label.hide()
 
     def check_license_on_startup(self):
-        """Проверить лицензию при запуске программы"""
-        print("Проверка лицензии при запуске...")
-
-        # Проверяем лицензию
-        license_check = self.license_manager.check_license()
-        self.is_licensed = license_check[0]
-
-        if not self.is_licensed:
-            # Лицензия не действительна - блокируем программу
-            self.lock_interface()
-
-            # Показываем критическое сообщение
-            QMessageBox.critical(
-                self,
-                "Лицензия не действительна",
-                f"Программа не может быть запущена.\n\nПричина: {license_check[2]}\n\n"
-                "Пожалуйста, активируйте лицензию во вкладке 'Настройки'."
-            )
-
-            # Переходим на вкладку настроек
-            self.tab_widget.setCurrentIndex(2)
-        else:
-            # Лицензия действительна - разблокируем интерфейс
-            self.unlock_interface()
-
-        # ОБНОВЛЯЕМ СТАТУС ЛИЦЕНЗИИ В ИНТЕРФЕЙСЕ ПРИ ЗАПУСКЕ
-        self.update_license_status()
+        """Удалён – заменён на асинхронную версию"""
+        pass
 
     def update_license_status(self):
         """Обновить статус лицензии в интерфейсе"""
@@ -1481,7 +1450,6 @@ class MainWindow(QMainWindow):
             else:
                 self.license_status_label.setText(f"Статус: {message}")
 
-            # Сохраняем состояние лицензии в настройках
             self.settings.settings.setValue("license/is_licensed", self.is_licensed)
             self.settings.settings.setValue("license/type", license_type)
             self.settings.settings.setValue("license/days_left", days_left)
@@ -1490,37 +1458,9 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"Ошибка при обновлении статуса лицензии: {e}")
 
-    def closeEvent(self, event):
-        """Обработка закрытия окна"""
-        try:
-            print("Сохранение состояния при закрытии приложения...")
-
-            # Сохраняем состояние таблицы
-            if hasattr(self, 'records_table'):
-                print("Сохранение состояния таблицы...")
-                self.records_table.save_state()
-
-            # Сохраняем информацию о лицензии
-            if hasattr(self, 'license_manager'):
-                license_info = self.license_manager.get_license_info()
-                self.settings.settings.setValue("license/is_licensed", license_info['is_valid'])
-                self.settings.settings.setValue("license/type", license_info['type'])
-                self.settings.settings.setValue("license/days_left", license_info['days_left'])
-                self.settings.settings.setValue("license/is_trial", license_info.get('is_trial', False))
-
-            self.save_settings()
-            print("Настройки успешно сохранены")
-            event.accept()
-        except Exception as e:
-            print(f"Ошибка при закрытии приложения: {e}")
-            event.accept()
-
-    # main_window.py - ДОБАВЛЯЕМ В КЛАСС MainWindow
-
     def save_window_geometry_for_update(self):
         """Сохранить геометрию окна для использования после обновления"""
         try:
-            # Получаем текущую геометрию окна
             geometry = {
                 "x": self.x(),
                 "y": self.y(),
@@ -1528,16 +1468,11 @@ class MainWindow(QMainWindow):
                 "height": self.height(),
                 "is_maximized": self.isMaximized()
             }
-
-            # Сохраняем во временный файл
-            import json
             geometry_file = os.path.join(self.get_script_dir(), "window_geometry.json")
             with open(geometry_file, 'w', encoding='utf-8') as f:
                 json.dump(geometry, f, indent=2, ensure_ascii=False)
-
             print(f"✅ Геометрия окна сохранена: {geometry}")
             return geometry_file
-
         except Exception as e:
             print(f"❌ Ошибка сохранения геометрии окна: {e}")
             return None
@@ -1551,7 +1486,6 @@ class MainWindow(QMainWindow):
                 with open(geometry_file, 'r', encoding='utf-8') as f:
                     geometry = json.load(f)
 
-                # Восстанавливаем размер и положение
                 if not geometry.get("is_maximized", False):
                     self.setGeometry(
                         geometry.get("x", 100),
@@ -1560,24 +1494,18 @@ class MainWindow(QMainWindow):
                         geometry.get("height", 800)
                     )
                 else:
-                    # Если окно было развернуто, сначала устанавливаем нормальный размер
                     self.setGeometry(
                         geometry.get("x", 100),
                         geometry.get("y", 100),
                         geometry.get("width", 1200),
                         geometry.get("height", 800)
                     )
-                    # Затем разворачиваем
                     self.showMaximized()
 
-                # Удаляем временный файл
                 os.remove(geometry_file)
                 print(f"✅ Геометрия окна восстановлена: {geometry}")
-
         except Exception as e:
             print(f"❌ Ошибка восстановления геометрии окна: {e}")
-
-    # === ДОБАВЛЕННЫЕ МЕТОДЫ ДЛЯ РАБОТЫ С ID ОБОРУДОВАНИЯ ===
 
     def copy_hardware_id(self):
         """Скопировать ID оборудования в буфер обмена"""
@@ -1585,7 +1513,6 @@ class MainWindow(QMainWindow):
             hardware_id = self.hardware_id_label.text()
             clipboard = QApplication.clipboard()
             clipboard.setText(hardware_id)
-
             QMessageBox.information(self, "ID скопирован",
                                     f"ID оборудования скопирован в буфер обмена:\n\n{hardware_id}\n\n"
                                     "Сообщите этот ID разработчику для получения лицензионного ключа.")
@@ -1596,7 +1523,6 @@ class MainWindow(QMainWindow):
         """Показать информацию о получении лицензионного ключа"""
         try:
             hardware_id = self.license_manager.get_hardware_id()
-
             message = f"""
 📋 ДЛЯ ПОЛУЧЕНИЯ ЛИЦЕНЗИОННОГО КЛЮЧА:
 
@@ -1620,7 +1546,28 @@ class MainWindow(QMainWindow):
 
 ID оборудования можно скопировать, нажав кнопку "Копировать" выше.
 """
-
             QMessageBox.information(self, "Получение лицензионного ключа", message)
         except Exception as e:
             QMessageBox.warning(self, "Ошибка", f"Не удалось показать информацию: {e}")
+
+    def closeEvent(self, event):
+        """Обработка закрытия окна"""
+        try:
+            print("Сохранение состояния при закрытии приложения...")
+            if hasattr(self, 'records_table'):
+                print("Сохранение состояния таблицы...")
+                self.records_table.save_state()
+
+            if hasattr(self, 'license_manager'):
+                license_info = self.license_manager.get_license_info()
+                self.settings.settings.setValue("license/is_licensed", license_info['is_valid'])
+                self.settings.settings.setValue("license/type", license_info['type'])
+                self.settings.settings.setValue("license/days_left", license_info['days_left'])
+                self.settings.settings.setValue("license/is_trial", license_info.get('is_trial', False))
+
+            self.save_settings()
+            print("Настройки успешно сохранены")
+            event.accept()
+        except Exception as e:
+            print(f"Ошибка при закрытии приложения: {e}")
+            event.accept()
