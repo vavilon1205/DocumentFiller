@@ -1,69 +1,46 @@
-# build_github.py - ИСПРАВЛЕННАЯ ВЕРСИЯ ДЛЯ ПРАВИЛЬНОЙ ЗАГРУЗКИ ФАЙЛОВ
+# build_github.py - ПОЛНАЯ СБОРКА ДЛЯ GITHUB В РЕЖИМЕ ONEDIR (2026 — рекомендуется)
 import os
+import sys
 import shutil
 import subprocess
-import sys
 import json
 from datetime import datetime
-import zipfile
 
 
-def build_github():
-    print("🚀 Запуск сборки для GitHub репозитория...")
-
-    # Запрашиваем версию у пользователя
-    version = input("Введите версию для сборки (например 1.0.1): ").strip()
-    if not version:
-        print("❌ Версия не указана")
-        return False
-
-    # Фиксированные настройки для GitHub репозитория
-    github_repo = "https://github.com/vavilon1205/DocumentFiller"
-    update_url = "https://github.com/vavilon1205/DocumentFiller/releases/latest"
-
-    print(f"📋 Сборка версии: {version}")
-    print(f"📦 GitHub репозиторий: {github_repo}")
-
-    # Обновляем версию в version.py
+def update_version_files(version):
+    """Обновить version.py и repo_config.json для GitHub"""
+    # version.py
     try:
-        version_content = f'# version.py - хранение версии в коде\n__version__ = "{version}"\n'
         with open("version.py", "w", encoding="utf-8") as f:
-            f.write(version_content)
-        print(f"✅ Версия обновлена в version.py: {version}")
+            f.write(f'# version.py - хранение версии в коде\n__version__ = "{version}"\n')
+        print(f"✅ version.py обновлён: v{version}")
     except Exception as e:
-        print(f"❌ Ошибка обновления version.py: {e}")
+        print(f"❌ Ошибка записи version.py: {e}")
         return False
 
-    # Создаем repo_config.json с актуальной информацией
+    # repo_config.json — GitHub-релиз
     try:
         config = {
             "type": "github",
-            "github_repo": github_repo,
+            "github_repo": "https://github.com/vavilon1205/DocumentFiller",
             "current_version": version,
-            "update_url": update_url,
+            "update_url": "https://github.com/vavilon1205/DocumentFiller/releases/latest",
             "online_license_db_url": ""
         }
-
         with open("repo_config.json", "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2, ensure_ascii=False)
-        print(f"✅ Конфиг обновлен: версия={version}, репозиторий={github_repo}")
+        print("✅ repo_config.json обновлён (GitHub-релиз)")
+        return True
     except Exception as e:
-        print(f"❌ Ошибка обновления repo_config.json: {e}")
+        print(f"❌ Ошибка записи repo_config.json: {e}")
         return False
 
-    # Проверяем существование папки с шаблонами
-    templates_dir = "Шаблоны"
-    if not os.path.exists(templates_dir):
-        print(f"❌ Папка '{templates_dir}' не найдена!")
-        print("Создайте папку 'Шаблоны' с шаблонами документов перед сборкой.")
-        return False
 
-    # Создаем spec файл
+def build_onedir():
+    """Сборка в режиме ONEDIR — самая быстрая по запуску"""
+    print("🔨 Сборка приложения в режиме ONEDIR (папка dist/DocumentFiller)...")
+
     spec_content = '''# -*- mode: python ; coding: utf-8 -*-
-
-import sys
-from PyInstaller.building.build_main import Analysis
-from PyInstaller.building.api import PYZ, EXE, COLLECT
 
 block_cipher = None
 
@@ -73,31 +50,47 @@ a = Analysis(
     binaries=[],
     datas=[
         ('repo_config.json', '.'),
+        ('version.py', '.'),
         ('Шаблоны', 'Шаблоны'),
-        ('version.py', '.')
     ],
     hiddenimports=[
-        'main_window', 'settings', 'theme_manager', 
-        'license_manager', 'update_manager', 'widgets', 'version',
-        'PyQt5', 'PyQt5.QtCore', 'PyQt5.QtGui', 'PyQt5.QtWidgets', 'PyQt5.QtNetwork',
+        'main_window',
+        'settings',
+        'theme_manager',
+        'license_manager',
+        'update_manager',
+        'widgets',
+        'version',
+        'PyQt5',
+        'PyQt5.QtCore',
+        'PyQt5.QtGui',
+        'PyQt5.QtWidgets',
+        'PyQt5.QtNetwork',
         'PyQt5.sip',
-        'openpyxl', 'docxtpl', 'jinja2', 'docx',
-        'lxml', 'lxml.etree', 'lxml._elementpath',
-        'requests', 'urllib3', 'chardet', 'idna', 'certifi',
-        'email', 'email.mime', 'email.mime.text', 'email.mime.multipart',
-        'email.mime.base', 'email.encoders', 'email.utils',
-        'hashlib', 'json', 'datetime', 'os', 'sys', 're',
-        'uuid', 'platform', 'threading', 'tempfile', 'zipfile',
+        'openpyxl',
+        'docxtpl',
+        'jinja2',
+        'docx',
+        'lxml.etree',
+        'requests',
+        'urllib3',
+        'certifi',
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        'tkinter',
+        'numpy',
+        'scipy',
+        'pandas',
+        'matplotlib',
+        'PIL',
+        'pygame',
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
-    noarchive=False,
-    optimize=1,
 )
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
@@ -105,267 +98,142 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
-    name='Программа',
+    exclude_binaries=True,
+    name='DocumentFiller',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
-    console=False,
+    upx=True,                    # можно убрать, если UPX замедляет запуск
+    console=False,               # без консоли → красивее для пользователей
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-    icon=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='DocumentFiller'
 )
 '''
 
-    spec_filename = 'document_filler_github.spec'
-    with open(spec_filename, 'w', encoding='utf-8') as f:
-        f.write(spec_content)
+    spec_path = "document_filler_github_onedir.spec"
 
-    # Очищаем папки перед сборкой
-    for dir_name in ['dist', 'build']:
-        if os.path.exists(dir_name):
-            print(f"🧹 Очистка папки {dir_name}...")
-            shutil.rmtree(dir_name)
-
-    # Запускаем сборку
     try:
-        print("🔨 Запуск PyInstaller...")
-        result = subprocess.run([
-            sys.executable, '-m', 'PyInstaller',
-            spec_filename, '--noconfirm', '--clean'
-        ], check=True, capture_output=True, text=True)
+        with open(spec_path, "w", encoding="utf-8") as f:
+            f.write(spec_content)
+        print(f"   → Создан spec: {spec_path}")
+    except Exception as e:
+        print(f"❌ Не удалось создать .spec файл: {e}")
+        return False
 
-        print("✅ Сборка завершена успешно!")
-
-        # Создаем файлы для GitHub Releases
-        original_exe_dir = os.path.join('dist', 'Программа')
-        original_exe = os.path.join(original_exe_dir, 'Программа.exe')
-
-        if os.path.exists(original_exe):
-            # Создаем EXE файл с версией в названии (ОСНОВНОЙ ДЛЯ ОБНОВЛЕНИЙ)
-            versioned_exe_name = f'DocumentFiller_v{version}.exe'
-            versioned_exe = os.path.join('dist', versioned_exe_name)
-            shutil.copy2(original_exe, versioned_exe)
-            print(f"📦 Создан EXE для GitHub: {versioned_exe_name}")
-
-            # Создаем ZIP архив с версией
-            zip_filename = f'DocumentFiller_v{version}.zip'
-            create_github_zip(original_exe_dir, zip_filename)
-            print(f"📦 Создан ZIP архив: {zip_filename}")
-
-            # Создаем инструкцию
-            create_github_instructions(version, versioned_exe_name, zip_filename)
-
-            # Создаем README для релиза
-            create_release_readme(version)
-
-        # Проверяем результат
-        if os.path.exists(original_exe_dir):
-            print(f"\n📁 Содержимое папки dist:")
-            for item in sorted(os.listdir('dist')):
-                item_path = os.path.join('dist', item)
-                if os.path.isfile(item_path):
-                    size = os.path.getsize(item_path) / (1024 * 1024)
-                    print(f"   📄 {item} ({size:.2f} МБ)")
-                elif os.path.isdir(item_path):
-                    file_count = len([f for f in os.listdir(item_path) if os.path.isfile(os.path.join(item_path, f))])
-                    print(f"   📂 {item}/ ({file_count} файлов)")
-
-            print(f"\n🎉 Сборка для GitHub завершена!")
-            return True
-        else:
-            print("❌ Папка с EXE не создана!")
-            return False
-
+    # Запуск PyInstaller
+    print("\nЗапускаем PyInstaller (обычно 1–5 минут)...")
+    try:
+        cmd = [
+            sys.executable,
+            "-m", "PyInstaller",
+            spec_path,
+            "--noconfirm",
+            "--clean",
+            "--log-level", "WARN"
+        ]
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        print("PyInstaller завершил работу успешно.")
+        if result.stdout:
+            last_lines = result.stdout.splitlines()[-8:]
+            print("\n".join(last_lines))
     except subprocess.CalledProcessError as e:
-        print(f"❌ Ошибка сборки: {e}")
-        if e.stderr:
-            print(f"Детали: {e.stderr}")
+        print("❌ PyInstaller завершился с ошибкой:")
+        print(e.stderr[-1200:] if e.stderr else "Нет подробного вывода")
         return False
     except Exception as e:
-        print(f"❌ Неожиданная ошибка: {e}")
-        return False
-    finally:
-        # Очищаем временные файлы
-        clean_temp_files()
-
-
-def create_github_zip(source_dir, zip_filename):
-    """Создать ZIP архив для GitHub"""
-    try:
-        with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            # Добавляем все файлы из source_dir в корень ZIP
-            for root, dirs, files in os.walk(source_dir):
-                for file in files:
-                    file_path = os.path.join(root, file)
-                    # Используем только имя файла (без путей) для помещения в корень
-                    arcname = file
-                    zipf.write(file_path, arcname)
-
-        # Перемещаем ZIP в dist
-        dist_zip = os.path.join('dist', zip_filename)
-        if os.path.exists(zip_filename):
-            shutil.move(zip_filename, dist_zip)
-
-        return True
-    except Exception as e:
-        print(f"❌ Ошибка создания ZIP: {e}")
+        print(f"❌ Ошибка при запуске PyInstaller: {e}")
         return False
 
+    # Проверка результата
+    final_folder = os.path.join("dist", "DocumentFiller")
+    if os.path.exists(final_folder) and os.path.isdir(final_folder):
+        exe_path = os.path.join(final_folder, "DocumentFiller.exe")
+        if os.path.exists(exe_path):
+            size_mb = os.path.getsize(exe_path) / (1024 * 1024)
+            print(f"\n🎉 Готово! Исполняемый файл: {exe_path}")
+            print(f"   Размер: ≈ {size_mb:.1f} МБ")
+            print("   Папка для распространения: dist/DocumentFiller")
+            return True
 
-def create_github_instructions(version, versioned_exe_name, zip_name):
-    """Создать инструкцию по загрузке в GitHub Releases"""
-    instructions = f"""
-📋 ИНСТРУКЦИЯ ПО ЗАГРУЗКЕ В GITHUB RELEASES:
-
-ВАЖНО: Для работы автоматических обновлений необходимо загрузить файлы в раздел "Assets" релиза!
-
-1. Перейдите на страницу репозитория: https://github.com/vavilon1205/DocumentFiller
-2. Нажмите "Create a new release" или выберите существующий релиз
-3. Для нового релиза:
-   - Tag: v{version}
-   - Title: DocumentFiller v{version}
-   - Description: Скопируйте содержимое из файла RELEASE_v{version}.md
-
-4. ЗАГРУЗИТЕ ФАЙЛЫ В РАЗДЕЛ "ASSETS":
-   - Перетащите файлы из папки 'dist' в область "Attach binaries by dropping them here or selecting them"
-   - Обязательно загрузите: {versioned_exe_name} (ОСНОВНОЙ ФАЙЛ ДЛЯ ОБНОВЛЕНИЙ)
-   - Также можно загрузить: {zip_name} (ZIP архив)
-
-5. Опубликуйте релиз
-
-6. После публикации программа сможет автоматически находить обновления!
-
-🔗 Ссылка для скачивания будет: 
-https://github.com/vavilon1205/DocumentFiller/releases/latest/download/{versioned_exe_name}
-
-⚙️ Конфигурация обновлений:
-- Репозиторий: https://github.com/vavilon1205/DocumentFiller
-- Текущая версия: {version}
-- Автоматические проверки: Включены
-
-💡 Рекомендации:
-- Файл {versioned_exe_name} используется для автоматических обновлений
-- Убедитесь, что файлы загружены в раздел "Assets" (должны отображаться в списке файлов релиза)
-"""
-
-    instructions_file = "github_release_instructions.txt"
-    with open(instructions_file, "w", encoding="utf-8") as f:
-        f.write(instructions)
-
-    print(f"📄 Создана инструкция: {instructions_file}")
-
-
-def create_release_readme(version):
-    """Создать README для релиза GitHub"""
-    readme_content = f"""# DocumentFiller v{version}
-
-## Программа для заполнения согласий и личных карточек
-
-### Что нового в версии {version}:
-- Автоматическое обновление через GitHub Releases
-- Улучшенный интерфейс пользователя
-- Исправлены ошибки предыдущих версий
-
-### Системные требования:
-- Windows 7/8/10/11
-- .NET Framework 4.5 или выше
-- 100 МБ свободного места на диске
-
-### Установка:
-1. Скачайте `DocumentFiller_v{version}.exe` из раздела Assets
-2. Запустите EXE файл
-
-### Обновление:
-Программа автоматически проверяет обновления при запуске.
-Для принудительной проверки: Сервис → Проверить обновления
-
-### Особенности:
-- Заполнение документов по шаблонам
-- Сохранение данных в Excel
-- Поддержка тем (светлая/темная)
-- Система лицензирования
-
-### Поддержка:
-Разработчик: Строчков Сергей Константинович
-Телефон: 8(920)791-30-43
-WhatsApp • Telegram
-
----
-*Собрано: {datetime.now().strftime("%d.%m.%Y %H:%M")}*
-"""
-
-    readme_filename = f"RELEASE_v{version}.md"
-    with open(readme_filename, "w", encoding="utf-8") as f:
-        f.write(readme_content)
-
-    print(f"📄 Создан README для релиза: {readme_filename}")
+    print(f"❌ Папка {final_folder} или exe-файл не созданы")
+    return False
 
 
 def clean_temp_files():
-    """Очистка временных файлов"""
-    try:
-        if os.path.exists('document_filler_github.spec'):
-            os.remove('document_filler_github.spec')
-            print("🧹 Удален временный файл: document_filler_github.spec")
+    """Очистка временных файлов после сборки"""
+    for path in ["document_filler_github_onedir.spec", "build"]:
+        try:
+            if os.path.isfile(path):
+                os.remove(path)
+            elif os.path.isdir(path):
+                shutil.rmtree(path, ignore_errors=True)
+        except:
+            pass
 
-        build_dir = 'build'
-        if os.path.exists(build_dir):
-            shutil.rmtree(build_dir)
-            print("🧹 Временная папка сборки очищена")
-    except Exception as e:
-        print(f"⚠️ Не удалось очистить временные файлы: {e}")
+
+def main():
+    print("=" * 70)
+    print("   СБОРКА DocumentFiller ДЛЯ GITHUB — РЕЖИМ ONEDIR (быстрый запуск)")
+    print("   Рекомендуется в 2026 году вместо onefile + bootstrap")
+    print("=" * 70)
+
+    # Проверка обязательных файлов
+    required = ["main.py", "main_window.py", "bootstrap.py", "version.py",
+                "update_manager.py", "license_manager.py", "widgets.py", "Шаблоны"]
+    missing = [f for f in required if not os.path.exists(f)]
+    if missing:
+        print("❌ Отсутствуют файлы:")
+        for f in missing:
+            print(f"   • {f}")
+        sys.exit(1)
+
+    version = input("\nВведите версию (пример: 1.0.76): ").strip()
+    if not version:
+        print("❌ Версия обязательна")
+        sys.exit(1)
+
+    if not update_version_files(version):
+        sys.exit(1)
+
+    # Очистка старых сборок
+    for d in ["dist", "build"]:
+        if os.path.exists(d):
+            try:
+                shutil.rmtree(d)
+                print(f"🧹 Удалена старая папка: {d}")
+            except:
+                pass
+
+    success = build_onedir()
+
+    clean_temp_files()
+
+    if success:
+        print("\n" + "=" * 70)
+        print(" ГОТОВО К РАСПРОСТРАНЕНИЮ")
+        print(" • Заархивируйте папку dist/DocumentFiller целиком")
+        print(" • Пользователь распаковывает → запускает DocumentFiller.exe")
+        print(" • Первый запуск: 3–10 сек (часто 4–7)")
+        print(" • Последующие запуски: обычно < 3 сек")
+        print(" • Совет: добавьте папку в исключения антивируса для ещё большей скорости")
+        print("=" * 70)
+    else:
+        print("\nСборка завершилась с ошибкой.")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    print("=" * 60)
-    print("        СБОРКА DocumentFiller ДЛЯ GITHUB")
-    print("=" * 60)
-
-    # Проверяем окружение
-    required_files = ['main.py', 'main_window.py', 'version.py', 'update_manager.py']
-    missing_files = []
-
-    for file in required_files:
-        if not os.path.exists(file):
-            missing_files.append(file)
-
-    if missing_files:
-        print("❌ Отсутствуют необходимые файлы для сборки:")
-        for file in missing_files:
-            print(f"   - {file}")
-        print("Убедитесь, что все файлы находятся в текущей папке.")
-        sys.exit(1)
-
-    # Проверяем наличие папки Шаблоны
-    if not os.path.exists("Шаблоны"):
-        print("❌ Папка 'Шаблоны' не найдена!")
-        print("Создайте папку 'Шаблоны' и добавьте туда шаблоны документов (.docx)")
-        sys.exit(1)
-
-    # Запускаем сборку
-    success = build_github()
-
-    if success:
-        print("\n" + "=" * 60)
-        print("✅ Сборка для GitHub успешно завершена!")
-        print("📍 Готовые файлы находятся в папке 'dist'")
-        print("\n📤 ВАЖНЫЕ ДЕЙСТВИЯ:")
-        print("1. Загрузите файлы из папки 'dist' в раздел ASSETS GitHub Releases")
-        print("2. Убедитесь, что файлы отображаются в списке файлов релиза")
-        print("3. Следуйте инструкции в файле 'github_release_instructions.txt'")
-        print("4. Используйте 'RELEASE_v{version}.md' как описание релиза")
-        print("\n🔔 После загрузки файлов в Assets программа сможет находить обновления!")
-        print("=" * 60)
-    else:
-        print("\n💥 Сборка не удалась!")
-        sys.exit(1)
+    main()
